@@ -35,6 +35,12 @@ const getPosts = async (req, res) => {
         userId && Array.isArray(data.likedBy)
           ? data.likedBy.includes(userId)
           : false,
+      repostCount: data.repostCount || 0,
+      repostedBy: Array.isArray(data.repostedBy) ? data.repostedBy : [],
+      reposted:
+        userId && Array.isArray(data.repostedBy)
+          ? data.repostedBy.includes(userId)
+          : false,
     }));
     posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     return res.status(200).json({ posts });
@@ -67,8 +73,8 @@ const createPost = async (req, res) => {
     let imageUrl = sanitizeInput(imageLink) || "";
     if (req.file) {
       const file = req.file;
-      if (!file.mimetype.startsWith("image/")) {
-        return res.status(400).json({ error: "Only image files are allowed" });
+      if (!file.mimetype.startsWith("image/") && !file.mimetype.startsWith("video/")) {
+        return res.status(400).json({ error: "Only image and video files are allowed" });
       }
       const fileName = `posts/${Date.now()}-${file.originalname}`;
       const fileRef = storage.bucket().file(fileName);
@@ -90,6 +96,11 @@ const createPost = async (req, res) => {
       comments: 0,
       likes: 0,
       likedBy: [],
+      repostCount: 0,
+      repostedBy: [],
+      isRepost: false,
+      originalPostId: null,
+      originalPost: null,
     };
     await database.ref(`posts/${postId}`).set(newPost);
     
@@ -239,8 +250,8 @@ const createComment = async (req, res) => {
     let attachmentUrl = "";
     if (req.file) {
       const file = req.file;
-      if (!file.mimetype.startsWith("image/")) {
-        return res.status(400).json({ error: "Only image files are allowed" });
+      if (!file.mimetype.startsWith("image/") && !file.mimetype.startsWith("video/")) {
+        return res.status(400).json({ error: "Only image and video files are allowed" });
       }
       const fileName = `posts/${postId}/comments/${Date.now()}-${
         file.originalname
@@ -321,8 +332,8 @@ const createReply = async (req, res) => {
     let attachmentUrl = "";
     if (req.file) {
       const file = req.file;
-      if (!file.mimetype.startsWith("image/")) {
-        return res.status(400).json({ error: "Only image files are allowed" });
+      if (!file.mimetype.startsWith("image/") && !file.mimetype.startsWith("video/")) {
+        return res.status(400).json({ error: "Only image and video files are allowed" });
       }
       const fileName = `posts/${postId}/comments/${commentId}/replies/${Date.now()}-${
         file.originalname
@@ -443,6 +454,157 @@ const likeReply = async (req, res) => {
   }
 };
 
+const repostPost = async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { postId } = req.params;
+    const { comment } = req.body; // Optional comment for the repost
+
+    if (!postId) {
+      return res.status(400).json({ error: "Post ID is required" });
+    }
+
+    // Get the original post
+    const originalPostRef = database.ref(`posts/${postId}`);
+    const originalPostSnapshot = await originalPostRef.once("value");
+    
+    if (!originalPostSnapshot.exists()) {
+      return res.status(404).json({ error: "Original post not found" });
+    }
+
+    const originalPost = originalPostSnapshot.val();
+    
+    // Check if user already reposted this post
+    if (originalPost.repostedBy && originalPost.repostedBy.includes(userId)) {
+      return res.status(400).json({ error: "You have already reposted this post" });
+    }
+
+    // Get user data
+    const userRef = database.ref(`users/${userId}`);
+    const userSnapshot = await userRef.once("value");
+    if (!userSnapshot.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    const userData = userSnapshot.val();
+
+    // Create repost
+    const repostId = uuidv4();
+    const repostData = {
+      authorId: userId,
+      author: userData.username || userData.email.split("@")[0],
+      authorImage: userData.avatar || "",
+      content: comment || "", // Optional comment
+      category: originalPost.category || "",
+      image: "", // Reposts don't have their own media
+      createdAt: new Date().toISOString(),
+      comments: 0,
+      likes: 0,
+      likedBy: [],
+      repostCount: 0,
+      repostedBy: [],
+      isRepost: true,
+      originalPostId: postId,
+      originalPost: {
+        id: postId,
+        author: originalPost.author,
+        authorId: originalPost.authorId,
+        content: originalPost.content,
+        image: originalPost.image,
+        category: originalPost.category,
+        createdAt: originalPost.createdAt,
+      },
+    };
+
+    // Save repost
+    await database.ref(`posts/${repostId}`).set(repostData);
+
+    // Update original post repost count and repostedBy array
+    const newRepostedBy = [...(originalPost.repostedBy || []), userId];
+    const newRepostCount = (originalPost.repostCount || 0) + 1;
+    
+    await originalPostRef.update({
+      repostCount: newRepostCount,
+      repostedBy: newRepostedBy,
+    });
+
+    // Add points for reposting
+    try {
+      await processPointsForAction(userId, "REPOST_POST", {
+        postId: repostId,
+        originalPostId: postId,
+        category: originalPost.category,
+      });
+    } catch (pointsError) {
+      console.warn("Failed to add points for repost:", pointsError);
+    }
+
+    return res.status(201).json({
+      message: "Post reposted successfully",
+      repostId,
+      repostCount: newRepostCount,
+    });
+  } catch (error) {
+    console.error("Error reposting post:", error.message, error.stack);
+    return res.status(500).json({ error: "Failed to repost post" });
+  }
+};
+
+const unrepostPost = async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { postId } = req.params;
+
+    if (!postId) {
+      return res.status(400).json({ error: "Post ID is required" });
+    }
+
+    // Get the original post
+    const originalPostRef = database.ref(`posts/${postId}`);
+    const originalPostSnapshot = await originalPostRef.once("value");
+    
+    if (!originalPostSnapshot.exists()) {
+      return res.status(404).json({ error: "Original post not found" });
+    }
+
+    const originalPost = originalPostSnapshot.val();
+    
+    // Check if user has reposted this post
+    if (!originalPost.repostedBy || !originalPost.repostedBy.includes(userId)) {
+      return res.status(400).json({ error: "You have not reposted this post" });
+    }
+
+    // Remove repost from original post
+    const newRepostedBy = originalPost.repostedBy.filter(id => id !== userId);
+    const newRepostCount = Math.max(0, (originalPost.repostCount || 0) - 1);
+    
+    await originalPostRef.update({
+      repostCount: newRepostCount,
+      repostedBy: newRepostedBy,
+    });
+
+    // Find and delete the repost
+    const postsRef = database.ref("posts");
+    const repostSnapshot = await postsRef.orderByChild("originalPostId").equalTo(postId).once("value");
+    
+    if (repostSnapshot.exists()) {
+      const repostEntries = Object.entries(repostSnapshot.val());
+      const userRepost = repostEntries.find(([_, repost]) => repost.authorId === userId);
+      
+      if (userRepost) {
+        await database.ref(`posts/${userRepost[0]}`).remove();
+      }
+    }
+
+    return res.status(200).json({
+      message: "Repost removed successfully",
+      repostCount: newRepostCount,
+    });
+  } catch (error) {
+    console.error("Error removing repost:", error.message, error.stack);
+    return res.status(500).json({ error: "Failed to remove repost" });
+  }
+};
+
 module.exports = {
   getPosts,
   createPost,
@@ -452,4 +614,6 @@ module.exports = {
   createReply,
   likeComment,
   likeReply,
+  repostPost,
+  unrepostPost,
 };

@@ -11,6 +11,8 @@ const {
   createReply,
   likeComment,
   likeReply,
+  repostPost,
+  unrepostPost,
 } = require("../controllers/post");
 
 const storage = multer.memoryStorage();
@@ -19,6 +21,8 @@ const upload = multer({ storage });
 router.get("/", getPosts);
 router.post("/", authenticate, upload.single("image"), createPost);
 router.post("/:id/like", authenticate, likePost);
+router.post("/:postId/repost", authenticate, repostPost);
+router.delete("/:postId/repost", authenticate, unrepostPost);
 router.get("/:postId/comments", getComments);
 router.post(
   "/:postId/comments",

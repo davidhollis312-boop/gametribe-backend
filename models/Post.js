@@ -13,6 +13,11 @@ class Post {
     comments = 0,
     link,
     createdAt = new Date().toISOString(),
+    repostCount = 0,
+    repostedBy = [],
+    isRepost = false,
+    originalPostId = null,
+    originalPost = null,
   }) {
     this.id = id;
     this.authorId = authorId;
@@ -27,6 +32,11 @@ class Post {
     this.comments = comments;
     this.link = link;
     this.createdAt = createdAt;
+    this.repostCount = repostCount;
+    this.repostedBy = repostedBy; // Array of user IDs who reposted
+    this.isRepost = isRepost;
+    this.originalPostId = originalPostId;
+    this.originalPost = originalPost;
   }
 
   toFirestore() {
@@ -43,6 +53,11 @@ class Post {
       comments: this.comments,
       link: this.link,
       createdAt: this.createdAt,
+      repostCount: this.repostCount,
+      repostedBy: this.repostedBy,
+      isRepost: this.isRepost,
+      originalPostId: this.originalPostId,
+      originalPost: this.originalPost,
     };
   }
 
@@ -61,6 +76,11 @@ class Post {
       comments: data.comments,
       link: data.link,
       createdAt: data.createdAt,
+      repostCount: data.repostCount,
+      repostedBy: data.repostedBy,
+      isRepost: data.isRepost,
+      originalPostId: data.originalPostId,
+      originalPost: data.originalPost,
     });
   }
 }
