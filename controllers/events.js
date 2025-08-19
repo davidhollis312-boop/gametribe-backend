@@ -24,6 +24,15 @@ const createEvent = async (req, res, next) => {
         .json({ error: "Title, description, and start date are required" });
     }
 
+    // Get user information to include author details
+    const userRef = database.ref(`users/${userId}`);
+    const userSnapshot = await userRef.once("value");
+    const userData = userSnapshot.val();
+
+    if (!userData) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
     const eventData = {
       title,
       description: sanitizeInput(description),
@@ -32,9 +41,13 @@ const createEvent = async (req, res, next) => {
       image: imageUrl || null,
       category: category || null,
       authorId: userId,
+      author: userData.username || userData.email?.split("@")[0] || "Unknown User",
+      authorImage: userData.avatar || "",
       createdAt: new Date().toISOString(),
       bookings: {},
       comments: 0,
+      likes: 0,
+      likedBy: [],
     };
 
     if (req.file) {
@@ -103,6 +116,34 @@ const updateEvent = async (req, res, next) => {
       req.body;
     const userId = req.user.uid;
 
+    if (
+      !title ||
+      !description ||
+      !startDate
+    ) {
+      return res
+        .status(400)
+        .json({ error: "Title, description, and start date are required" });
+    }
+
+    const start = new Date(startDate);
+    const end = endDate ? new Date(endDate) : null;
+    if (isNaN(start.getTime())) {
+      return res.status(400).json({ error: "Invalid start date" });
+    }
+    if (end && isNaN(end.getTime())) {
+      return res.status(400).json({ error: "Invalid end date" });
+    }
+    if (end && end < start) {
+      return res.status(400).json({ error: "End date must be after start date" });
+    }
+    if (imageUrl && req.file) {
+      return res.status(400).json({ error: "Please provide either an image file or URL, not both" });
+    }
+    if (req.file && req.file.size > 5 * 1024 * 1024) {
+      return res.status(400).json({ error: "Image size must be less than 5MB" });
+    }
+
     const eventRef = database.ref(`events/${id}`);
     const snapshot = await eventRef.once("value");
     const event = snapshot.val();
@@ -114,25 +155,6 @@ const updateEvent = async (req, res, next) => {
       return res
         .status(403)
         .json({ error: "Unauthorized: Only the author can update this event" });
-    }
-
-    let start, end;
-    if (startDate) {
-      start = new Date(startDate);
-      if (isNaN(start.getTime())) {
-        return res.status(400).json({ error: "Invalid start date" });
-      }
-    }
-    if (endDate) {
-      end = new Date(endDate);
-      if (isNaN(end.getTime())) {
-        return res.status(400).json({ error: "Invalid end date" });
-      }
-      if (startDate && end < new Date(startDate)) {
-        return res
-          .status(400)
-          .json({ error: "End date must be after start date" });
-      }
     }
 
     let image = event.image;

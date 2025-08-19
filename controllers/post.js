@@ -36,11 +36,15 @@ const getPosts = async (req, res) => {
           ? data.likedBy.includes(userId)
           : false,
       repostCount: data.repostCount || 0,
+      directRepostCount: data.directRepostCount || 0,
       repostedBy: Array.isArray(data.repostedBy) ? data.repostedBy : [],
       reposted:
         userId && Array.isArray(data.repostedBy)
           ? data.repostedBy.includes(userId)
           : false,
+      repostChain: data.repostChain || [],
+      originalAuthor: data.originalAuthor || null,
+      originalPostId: data.originalPostId || null,
     }));
     posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     return res.status(200).json({ posts });
@@ -97,10 +101,13 @@ const createPost = async (req, res) => {
       likes: 0,
       likedBy: [],
       repostCount: 0,
+      directRepostCount: 0,
       repostedBy: [],
       isRepost: false,
       originalPostId: null,
       originalPost: null,
+      repostChain: [],
+      originalAuthor: null,
     };
     await database.ref(`posts/${postId}`).set(newPost);
     
@@ -271,7 +278,7 @@ const createComment = async (req, res) => {
       author: userData.username || userData.email.split("@")[0],
       authorImage: userData.avatar || "",
       content: sanitizedContent,
-      attachment: attachmentUrl,
+      image: attachmentUrl,
       likes: 0,
       likedBy: [],
       createdAt: new Date().toISOString(),
@@ -354,7 +361,7 @@ const createReply = async (req, res) => {
       author: userData.username || userData.email.split("@")[0],
       authorImage: userData.avatar || "",
       content: sanitizedContent,
-      attachment: attachmentUrl,
+      image: attachmentUrl,
       likes: 0,
       likedBy: [],
       createdAt: new Date().toISOString(),
@@ -362,7 +369,10 @@ const createReply = async (req, res) => {
     await database
       .ref(`posts/${postId}/comments/${commentId}/replies/${replyId}`)
       .set(reply);
-    await postRef.update({ comments: (postSnapshot.val().comments || 0) + 1 });
+    
+    // Update comment replies count instead of post comments count
+    await commentRef.update({ replies: (commentSnapshot.val().replies || 0) + 1 });
+    
     return res.status(201).json(reply);
   } catch (error) {
     console.error("Error creating reply:", error.message, error.stack);
@@ -474,6 +484,13 @@ const repostPost = async (req, res) => {
 
     const originalPost = originalPostSnapshot.val();
     
+    // NEW LOGIC: Prevent reposting of reposts
+    if (originalPost.isRepost) {
+      return res.status(400).json({ 
+        error: "You can only repost original content, not reposts. Please repost the original post instead." 
+      });
+    }
+    
     // Check if user already reposted this post
     if (originalPost.repostedBy && originalPost.repostedBy.includes(userId)) {
       return res.status(400).json({ error: "You have already reposted this post" });
@@ -487,7 +504,15 @@ const repostPost = async (req, res) => {
     }
     const userData = userSnapshot.val();
 
-    // Create repost
+    // Build repost chain - since we only allow reposting original content, this is always the first level
+    const repostChain = [{
+      postId: originalPost.id,
+      authorId: originalPost.authorId,
+      author: originalPost.author,
+      timestamp: originalPost.createdAt
+    }];
+
+    // Create repost with enhanced data structure
     const repostId = uuidv4();
     const repostData = {
       authorId: userId,
@@ -501,30 +526,36 @@ const repostPost = async (req, res) => {
       likes: 0,
       likedBy: [],
       repostCount: 0,
+      directRepostCount: 0,
       repostedBy: [],
       isRepost: true,
-      originalPostId: postId,
+      originalPostId: postId, // Points to the original post being reposted
       originalPost: {
-        id: postId,
+        id: originalPost.id,
         author: originalPost.author,
         authorId: originalPost.authorId,
+        authorImage: originalPost.authorImage, // Include author image
         content: originalPost.content,
         image: originalPost.image,
         category: originalPost.category,
         createdAt: originalPost.createdAt,
       },
+      repostChain: repostChain, // Always just the original post since no nested reposts
+      originalAuthor: originalPost.author, // Always points to the original author
     };
 
     // Save repost
     await database.ref(`posts/${repostId}`).set(repostData);
 
-    // Update original post repost count and repostedBy array
+    // Update the original post being reposted
     const newRepostedBy = [...(originalPost.repostedBy || []), userId];
+    const newDirectRepostCount = (originalPost.directRepostCount || 0) + 1;
     const newRepostCount = (originalPost.repostCount || 0) + 1;
     
     await originalPostRef.update({
-      repostCount: newRepostCount,
+      directRepostCount: newDirectRepostCount,
       repostedBy: newRepostedBy,
+      repostCount: newRepostCount
     });
 
     // Add points for reposting
@@ -546,6 +577,59 @@ const repostPost = async (req, res) => {
   } catch (error) {
     console.error("Error reposting post:", error.message, error.stack);
     return res.status(500).json({ error: "Failed to repost post" });
+  }
+};
+
+const getRepostChain = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    
+    if (!postId) {
+      return res.status(400).json({ error: "Post ID is required" });
+    }
+
+    // Get the post
+    const postRef = database.ref(`posts/${postId}`);
+    const postSnapshot = await postRef.once("value");
+    
+    if (!postSnapshot.exists()) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    const post = postSnapshot.val();
+    
+    // If it's not a repost, return empty chain
+    if (!post.isRepost) {
+      return res.status(200).json({ 
+        repostChain: [],
+        originalPost: post,
+        isOriginal: true
+      });
+    }
+
+    // Get the repost chain
+    const repostChain = post.repostChain || [];
+    
+    // Get the original post
+    let originalPost = null;
+    if (post.originalPostId) {
+      const originalPostRef = database.ref(`posts/${post.originalPostId}`);
+      const originalPostSnapshot = await originalPostRef.once("value");
+      if (originalPostSnapshot.exists()) {
+        originalPost = originalPostSnapshot.val();
+      }
+    }
+
+    return res.status(200).json({
+      repostChain,
+      originalPost,
+      isOriginal: false,
+      originalAuthor: post.originalAuthor,
+      repostDepth: repostChain.length
+    });
+  } catch (error) {
+    console.error("Error getting repost chain:", error.message, error.stack);
+    return res.status(500).json({ error: "Failed to get repost chain" });
   }
 };
 
@@ -573,14 +657,32 @@ const unrepostPost = async (req, res) => {
       return res.status(400).json({ error: "You have not reposted this post" });
     }
 
-    // Remove repost from original post
+    // Remove repost from the post being reposted
     const newRepostedBy = originalPost.repostedBy.filter(id => id !== userId);
-    const newRepostCount = Math.max(0, (originalPost.repostCount || 0) - 1);
+    const newDirectRepostCount = Math.max(0, (originalPost.directRepostCount || 0) - 1);
     
     await originalPostRef.update({
-      repostCount: newRepostCount,
+      directRepostCount: newDirectRepostCount,
       repostedBy: newRepostedBy,
     });
+
+    // Update original post (Chris's post) total repost count
+    if (originalPost.isRepost) {
+      // This is a repost, so update the original original post
+      const originalOriginalPostRef = database.ref(`posts/${originalPost.originalPostId || originalPost.id}`);
+      const originalOriginalSnapshot = await originalOriginalPostRef.once("value");
+      if (originalOriginalSnapshot.exists()) {
+        const originalOriginalData = originalOriginalSnapshot.val();
+        await originalOriginalPostRef.update({
+          repostCount: Math.max(0, (originalOriginalData.repostCount || 0) - 1)
+        });
+      }
+    } else {
+      // This is the original post, update its total count
+      await originalPostRef.update({
+        repostCount: Math.max(0, (originalPost.repostCount || 0) - 1)
+      });
+    }
 
     // Find and delete the repost
     const postsRef = database.ref("posts");
@@ -597,7 +699,7 @@ const unrepostPost = async (req, res) => {
 
     return res.status(200).json({
       message: "Repost removed successfully",
-      repostCount: newRepostCount,
+      repostCount: newDirectRepostCount,
     });
   } catch (error) {
     console.error("Error removing repost:", error.message, error.stack);
@@ -616,4 +718,5 @@ module.exports = {
   likeReply,
   repostPost,
   unrepostPost,
+  getRepostChain,
 };

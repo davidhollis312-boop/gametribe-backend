@@ -25,7 +25,20 @@ const upload = multer({
 // Apply CORS
 app.use(
   cors({
-    origin: ["http://localhost:5173", "https://hub.gametribe.com"],
+    origin: [
+      // Development URLs
+      "http://localhost:5173", 
+      "http://localhost:5174",
+      "http://localhost:5000",
+      // Production URLs
+      "https://hub.gametribe.com",
+      "https://gametribe.com",
+      "https://gt-server-mu.vercel.app"
+    ],
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-SSO-Token", "X-Community-Token"],
+    exposedHeaders: ["X-SSO-Token", "X-Community-Token"]
   })
 );
 
@@ -54,6 +67,9 @@ app.use("/api/users", usersRouter);
 app.use("/api/events", eventsRouter);
 app.use("/api/payments", paymentRouter);
 app.use("/api/leaderboard", leaderboardRouter);
+
+// Add auth route for cross-platform authentication
+app.use("/api/auth", require("./routes/auth"));
 
 app.get("/api/test", (req, res) => {
   res.json({ message: "API is working" });

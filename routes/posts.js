@@ -13,6 +13,7 @@ const {
   likeReply,
   repostPost,
   unrepostPost,
+  getRepostChain,
 } = require("../controllers/post");
 
 const storage = multer.memoryStorage();
@@ -23,6 +24,7 @@ router.post("/", authenticate, upload.single("image"), createPost);
 router.post("/:id/like", authenticate, likePost);
 router.post("/:postId/repost", authenticate, repostPost);
 router.delete("/:postId/repost", authenticate, unrepostPost);
+router.get("/:postId/repost-chain", getRepostChain);
 router.get("/:postId/comments", getComments);
 router.post(
   "/:postId/comments",

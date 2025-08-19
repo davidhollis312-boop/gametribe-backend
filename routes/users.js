@@ -14,7 +14,7 @@ const {
   updateUserCountry,
 } = require("../controllers/users");
 const authenticate = require("../middleware/auth");
-
+const { verifyToken } = require("../middleware/authMiddleware");
 
 
 router.get("/profile", authenticate, getUserProfile);
@@ -28,5 +28,17 @@ router.get("/:userId", authenticate, getUserById);
 router.post("/update-status", authenticate, updateUserStatus);
 router.post("/sync-presence", authenticate, syncPresence);
 router.put("/country", authenticate, updateUserCountry);
+
+// GET endpoint for token verification (for cross-platform auth)
+router.get('/verify', verifyToken, (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      user: req.user,
+      platform: 'community',
+      server: 'gametribe-backend'
+    }
+  });
+});
 
 module.exports = router;
