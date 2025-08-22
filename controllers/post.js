@@ -470,6 +470,8 @@ const repostPost = async (req, res) => {
     const { postId } = req.params;
     const { comment } = req.body; // Optional comment for the repost
 
+    console.log('🔄 Backend repostPost called:', { userId, postId, comment });
+
     if (!postId) {
       return res.status(400).json({ error: "Post ID is required" });
     }
@@ -479,13 +481,21 @@ const repostPost = async (req, res) => {
     const originalPostSnapshot = await originalPostRef.once("value");
     
     if (!originalPostSnapshot.exists()) {
+      console.log('❌ Original post not found:', postId);
       return res.status(404).json({ error: "Original post not found" });
     }
 
     const originalPost = originalPostSnapshot.val();
+    console.log('📊 Original post data:', { 
+      id: originalPost.id, 
+      author: originalPost.author, 
+      isRepost: originalPost.isRepost,
+      repostedBy: originalPost.repostedBy || []
+    });
     
     // NEW LOGIC: Prevent reposting of reposts
     if (originalPost.isRepost) {
+      console.log('❌ Cannot repost a repost:', postId);
       return res.status(400).json({ 
         error: "You can only repost original content, not reposts. Please repost the original post instead." 
       });
@@ -493,6 +503,7 @@ const repostPost = async (req, res) => {
     
     // Check if user already reposted this post
     if (originalPost.repostedBy && originalPost.repostedBy.includes(userId)) {
+      console.log('❌ User already reposted:', { userId, postId });
       return res.status(400).json({ error: "You have already reposted this post" });
     }
 
@@ -500,13 +511,15 @@ const repostPost = async (req, res) => {
     const userRef = database.ref(`users/${userId}`);
     const userSnapshot = await userRef.once("value");
     if (!userSnapshot.exists()) {
+      console.log('❌ User not found:', userId);
       return res.status(404).json({ error: "User not found" });
     }
     const userData = userSnapshot.val();
+    console.log('👤 User data:', { username: userData.username, email: userData.email });
 
     // Build repost chain - since we only allow reposting original content, this is always the first level
     const repostChain = [{
-      postId: originalPost.id,
+      postId: originalPost.id || postId,
       authorId: originalPost.authorId,
       author: originalPost.author,
       timestamp: originalPost.createdAt
@@ -515,6 +528,7 @@ const repostPost = async (req, res) => {
     // Create repost with enhanced data structure
     const repostId = uuidv4();
     const repostData = {
+      id: repostId, // ✅ Add the ID field
       authorId: userId,
       author: userData.username || userData.email.split("@")[0],
       authorImage: userData.avatar || "",
@@ -531,7 +545,7 @@ const repostPost = async (req, res) => {
       isRepost: true,
       originalPostId: postId, // Points to the original post being reposted
       originalPost: {
-        id: originalPost.id,
+        id: originalPost.id || postId, // ✅ Use postId if originalPost.id is missing
         author: originalPost.author,
         authorId: originalPost.authorId,
         authorImage: originalPost.authorImage, // Include author image
@@ -544,8 +558,11 @@ const repostPost = async (req, res) => {
       originalAuthor: originalPost.author, // Always points to the original author
     };
 
+    console.log('💾 Repost data to save:', { repostId, repostData });
+
     // Save repost
     await database.ref(`posts/${repostId}`).set(repostData);
+    console.log('✅ Repost saved to database');
 
     // Update the original post being reposted
     const newRepostedBy = [...(originalPost.repostedBy || []), userId];
@@ -557,6 +574,7 @@ const repostPost = async (req, res) => {
       repostedBy: newRepostedBy,
       repostCount: newRepostCount
     });
+    console.log('✅ Original post updated with new repost counts');
 
     // Add points for reposting
     try {
@@ -565,17 +583,19 @@ const repostPost = async (req, res) => {
         originalPostId: postId,
         category: originalPost.category,
       });
+      console.log('✅ Points added for repost');
     } catch (pointsError) {
       console.warn("Failed to add points for repost:", pointsError);
     }
 
+    console.log('🎉 Repost completed successfully:', { repostId, newRepostCount });
     return res.status(201).json({
       message: "Post reposted successfully",
       repostId,
       repostCount: newRepostCount,
     });
   } catch (error) {
-    console.error("Error reposting post:", error.message, error.stack);
+    console.error("❌ Error reposting post:", error.message, error.stack);
     return res.status(500).json({ error: "Failed to repost post" });
   }
 };
