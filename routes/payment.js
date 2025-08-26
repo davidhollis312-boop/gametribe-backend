@@ -7,6 +7,7 @@ const {
   stripeWebhook,
   convertWalletToPoints,
   getUserTransactions,
+  getStripeTransactionStatus,
 } = require("../controllers/payment");
 const authenticate = require("../middleware/auth");
 
@@ -19,5 +20,6 @@ router.post("/convert-wallet-to-points", authenticate, convertWalletToPoints);
 
 // Transaction routes
 router.get("/transactions", authenticate, getUserTransactions);
+router.get("/stripe/status/:transactionId", authenticate, getStripeTransactionStatus);
 
 module.exports = router;

@@ -30,10 +30,10 @@ app.use(
       "http://localhost:5173", 
       "http://localhost:5174",
       "http://localhost:5000",
-      // Production URLs
-      "https://hub.gametribe.com",
-      "https://gametribe.com",
-      "https://gt-server-mu.vercel.app"
+      // Production URLs (commented out for development)
+      // "https://hub.gametribe.com",
+      // "https://gametribe.com",
+      // "https://gt-server-mu.vercel.app"
     ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
