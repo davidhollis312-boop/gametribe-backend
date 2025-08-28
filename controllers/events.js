@@ -14,7 +14,7 @@ const sanitizeInput = (html) => {
 
 const createEvent = async (req, res, next) => {
   try {
-    const { title, description, startDate, endDate, imageUrl, category } =
+    const { title, description, startDate, endDate, imageUrl, category, maxAttendees } =
       req.body;
     const userId = req.user.uid;
 
@@ -40,6 +40,7 @@ const createEvent = async (req, res, next) => {
       endDate: endDate || null,
       image: imageUrl || null,
       category: category || null,
+      maxAttendees: maxAttendees ? parseInt(maxAttendees) : null,
       authorId: userId,
       author: userData.username || userData.email?.split("@")[0] || "Unknown User",
       authorImage: userData.avatar || "",
@@ -112,7 +113,7 @@ const getEventById = async (req, res, next) => {
 const updateEvent = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { title, description, startDate, endDate, imageUrl, category } =
+    const { title, description, startDate, endDate, imageUrl, category, maxAttendees } =
       req.body;
     const userId = req.user.uid;
 
@@ -182,6 +183,7 @@ const updateEvent = async (req, res, next) => {
     if (endDate !== undefined) updates.endDate = end ? end.toISOString() : null;
     if (image !== undefined) updates.image = image;
     if (category !== undefined) updates.category = category;
+    if (maxAttendees !== undefined) updates.maxAttendees = maxAttendees ? parseInt(maxAttendees) : null;
 
     await eventRef.set({ ...event, ...updates });
     res.status(200).json({ id, ...event, ...updates });
