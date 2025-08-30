@@ -5,6 +5,8 @@ const authenticate = require("../middleware/auth");
 const {
   getPosts,
   createPost,
+  updatePost,
+  deletePost,
   likePost,
   getComments,
   createComment,
@@ -21,6 +23,8 @@ const upload = multer({ storage });
 
 router.get("/", getPosts);
 router.post("/", authenticate, upload.single("image"), createPost);
+router.put("/:postId", authenticate, upload.single("image"), updatePost);
+router.delete("/:postId", authenticate, deletePost);
 router.post("/:id/like", authenticate, likePost);
 router.post("/:postId/repost", authenticate, repostPost);
 router.delete("/:postId/repost", authenticate, unrepostPost);

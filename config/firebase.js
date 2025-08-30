@@ -1,11 +1,11 @@
 const admin = require("firebase-admin");
-const serviceAccount = require("../firebase-adminsdk.json");
+const serviceAccount = require("./firebase-adminsdk.json");
 
 try {
   const app = admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
     databaseURL: "https://gametibe2025-default-rtdb.firebaseio.com",
-    storageBucket: "gametibe2025.firebasestorage.app",
+    storageBucket: "gametibe2025.appspot.com",
   });
 
   const auth = admin.auth();

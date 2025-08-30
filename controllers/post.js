@@ -727,9 +727,120 @@ const unrepostPost = async (req, res) => {
   }
 };
 
+const updatePost = async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { postId } = req.params;
+    const { content, category, imageLink } = req.body;
+
+    if (!content || typeof content !== "string" || content.trim().length === 0) {
+      return res.status(400).json({
+        error: "Post content is required and must be a non-empty string",
+      });
+    }
+
+    // Get the post to check ownership
+    const postRef = database.ref(`posts/${postId}`);
+    const postSnapshot = await postRef.once("value");
+    
+    if (!postSnapshot.exists()) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    const post = postSnapshot.val();
+    
+    // Check if user owns the post
+    if (post.authorId !== userId) {
+      return res.status(403).json({ error: "You can only edit your own posts" });
+    }
+
+    const sanitizedContent = sanitizeInput(content);
+    let imageUrl = sanitizeInput(imageLink) || post.image || "";
+
+    // Handle file upload if provided
+    if (req.file) {
+      const file = req.file;
+      if (!file.mimetype.startsWith("image/") && !file.mimetype.startsWith("video/")) {
+        return res.status(400).json({ error: "Only image and video files are allowed" });
+      }
+      const fileName = `posts/${Date.now()}-${file.originalname}`;
+      const fileRef = storage.bucket().file(fileName);
+      await fileRef.save(file.buffer, { contentType: file.mimetype });
+      [imageUrl] = await fileRef.getSignedUrl({
+        action: "read",
+        expires: "03-09-2491",
+      });
+    }
+
+    // Update the post
+    const updatedPost = {
+      content: sanitizedContent,
+      category: sanitizeInput(category) || post.category || "",
+      image: imageUrl,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await postRef.update(updatedPost);
+
+    // Get the updated post
+    const updatedSnapshot = await postRef.once("value");
+    const finalPost = updatedSnapshot.val();
+
+    return res.status(200).json({
+      message: "Post updated successfully",
+      post: {
+        id: postId,
+        ...finalPost,
+      },
+    });
+  } catch (error) {
+    console.error("Error updating post:", error.message, error.stack);
+    return res.status(500).json({ error: "Failed to update post" });
+  }
+};
+
+const deletePost = async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { postId } = req.params;
+
+    if (!postId) {
+      return res.status(400).json({ error: "Post ID is required" });
+    }
+
+    // Get the post to check ownership
+    const postRef = database.ref(`posts/${postId}`);
+    const postSnapshot = await postRef.once("value");
+    
+    if (!postSnapshot.exists()) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    const post = postSnapshot.val();
+    
+    // Check if user owns the post
+    if (post.authorId !== userId) {
+      return res.status(403).json({ error: "You can only delete your own posts" });
+    }
+
+    // Delete the post
+    await postRef.remove();
+
+    return res.status(200).json({
+      message: "Post deleted successfully",
+      postId: postId
+    });
+  } catch (error) {
+    console.error("Error deleting post:", error.message, error.stack);
+    return res.status(500).json({ error: "Failed to delete post" });
+  }
+};
+
 module.exports = {
   getPosts,
   createPost,
+  updatePost,
+  deletePost,
   likePost,
   getComments,
   createComment,
