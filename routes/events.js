@@ -15,6 +15,10 @@ const {
   likeEventComment,
   likeEventReply,
   likeEvent,
+  getUserEventBookings,
+  getUserBookings,
+  getCreatedEvents,
+  contactBooker,
 } = require("../controllers/events");
 const authenticate = require("../middleware/auth");
 const multer = require("multer");
@@ -52,6 +56,10 @@ router.put("/:id", authenticate, upload.single("image"), updateEvent);
 router.delete("/:id", authenticate, deleteEvent);
 router.post("/:id/book", authenticate, bookEvent);
 router.delete("/:id/book", authenticate, cancelBooking);
+router.get("/user/bookings", authenticate, getUserEventBookings);
+router.get("/user/my-bookings", authenticate, getUserBookings);
+router.get("/user/created-events", authenticate, getCreatedEvents);
+router.post("/contact-booker", authenticate, contactBooker);
 router.post(
   "/:id/comments",
   authenticate,

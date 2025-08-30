@@ -311,7 +311,240 @@ const getEventBookings = async (req, res, next) => {
     res.status(200).json(bookingsWithUsers);
   } catch (error) {
     console.error("Error fetching bookings:", error.message, error.stack);
-    next(error);
+    res.status(500).json({ error: "Failed to fetch bookings" });
+  }
+};
+
+const getUserEventBookings = async (req, res, next) => {
+  try {
+    const userId = req.user.uid;
+    
+    // Get all events created by this user
+    const eventsRef = database.ref("events");
+    const snapshot = await eventsRef.orderByChild("authorId").equalTo(userId).once("value");
+    const events = snapshot.val() || {};
+    
+    const allBookings = [];
+    
+    // For each event, get the bookings
+    for (const [eventId, event] of Object.entries(events)) {
+      if (event.bookings) {
+        const eventBookings = await Promise.all(
+          Object.entries(event.bookings).map(async ([bookerId, booking]) => {
+            const userSnapshot = await database
+              .ref(`users/${bookerId}`)
+              .once("value");
+            const user = userSnapshot.val() || {};
+            
+            return {
+              eventId,
+              eventTitle: event.title,
+              eventDate: event.startDate,
+              bookerId,
+              bookerName: user.displayName || user.email?.split("@")[0] || "Anonymous",
+              bookerAvatar: user.avatar || "https://via.placeholder.com/40",
+              bookedAt: booking.bookedAt,
+            };
+          })
+        );
+        
+        allBookings.push(...eventBookings);
+      }
+    }
+    
+    // Sort by booking date (newest first)
+    allBookings.sort((a, b) => new Date(b.bookedAt) - new Date(a.bookedAt));
+    
+    res.status(200).json(allBookings);
+  } catch (error) {
+    console.error("Error fetching user event bookings:", error.message, error.stack);
+    res.status(500).json({ error: "Failed to fetch user event bookings" });
+  }
+};
+
+// Get user's own bookings (events they've booked for)
+const getUserBookings = async (req, res, next) => {
+  try {
+    const userId = req.user.uid;
+    
+    // Get all events and find ones where this user has booked
+    const eventsRef = database.ref("events");
+    const snapshot = await eventsRef.once("value");
+    const events = snapshot.val() || {};
+    
+    const userBookings = [];
+    
+    // For each event, check if the user has booked
+    for (const [eventId, event] of Object.entries(events)) {
+      if (event.bookings && event.bookings[userId]) {
+        const booking = event.bookings[userId];
+        const organizerSnapshot = await database
+          .ref(`users/${event.authorId}`)
+          .once("value");
+        const organizer = organizerSnapshot.val() || {};
+        
+        userBookings.push({
+          eventId,
+          eventTitle: event.title,
+          eventDate: event.startDate,
+          eventDescription: event.description,
+          eventImage: event.image,
+          organizerId: event.authorId,
+          organizerName: organizer.displayName || organizer.email?.split("@")[0] || "Event Organizer",
+          organizerAvatar: organizer.avatar || "https://via.placeholder.com/40",
+          bookedAt: booking.bookedAt,
+          bookingStatus: "confirmed"
+        });
+      }
+    }
+    
+    // Sort by booking date (newest first)
+    userBookings.sort((a, b) => new Date(b.bookedAt) - new Date(a.bookedAt));
+    
+    res.status(200).json(userBookings);
+  } catch (error) {
+    console.error("Error fetching user bookings:", error.message, error.stack);
+    res.status(500).json({ error: "Failed to fetch user bookings" });
+  }
+};
+
+// Get events created by the current user with all their bookings
+const getCreatedEvents = async (req, res, next) => {
+  try {
+    const userId = req.user.uid;
+    
+    // Get all events created by this user
+    const eventsRef = database.ref("events");
+    const snapshot = await eventsRef.once("value");
+    const events = snapshot.val() || {};
+    
+    const createdEvents = [];
+    
+    // For each event, check if the user is the author
+    for (const [eventId, event] of Object.entries(events)) {
+      if (event.authorId === userId) {
+        const eventBookings = [];
+        
+        // Get all bookings for this event
+        if (event.bookings) {
+          for (const [bookerId, booking] of Object.entries(event.bookings)) {
+            const bookerSnapshot = await database
+              .ref(`users/${bookerId}`)
+              .once("value");
+            const booker = bookerSnapshot.val() || {};
+            
+            eventBookings.push({
+              bookerId,
+              bookerName: booker.displayName || booker.email?.split("@")[0] || "Anonymous",
+              bookerAvatar: booker.avatar || "https://via.placeholder.com/40",
+              bookedAt: booking.bookedAt,
+              bookingStatus: "confirmed"
+            });
+          }
+        }
+        
+        // Sort bookings by date (newest first)
+        eventBookings.sort((a, b) => new Date(b.bookedAt) - new Date(a.bookedAt));
+        
+        createdEvents.push({
+          eventId,
+          eventTitle: event.title,
+          eventDate: event.startDate,
+          eventDescription: event.description,
+          eventImage: event.image,
+          createdAt: event.createdAt,
+          maxAttendees: event.maxAttendees || 0,
+          bookings: eventBookings
+        });
+      }
+    }
+    
+    // Sort events by creation date (newest first)
+    createdEvents.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    
+    res.status(200).json(createdEvents);
+  } catch (error) {
+    console.error("Error fetching created events:", error.message, error.stack);
+    res.status(500).json({ error: "Failed to fetch created events" });
+  }
+};
+
+const contactBooker = async (req, res, next) => {
+  try {
+    const userId = req.user.uid;
+    const { bookerId, eventId, eventTitle, message } = req.body;
+
+    if (!bookerId || !eventId || !eventTitle || !message) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Verify the event belongs to the user
+    const eventRef = database.ref(`events/${eventId}`);
+    const eventSnapshot = await eventRef.once("value");
+    const event = eventSnapshot.val();
+
+    if (!event) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+
+    if (event.authorId !== userId) {
+      return res.status(403).json({ error: "You can only contact bookers for your own events" });
+    }
+
+    // Verify the booking exists
+    const bookingRef = database.ref(`events/${eventId}/bookings/${bookerId}`);
+    const bookingSnapshot = await bookingRef.once("value");
+    
+    if (!bookingSnapshot.exists()) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    // Get booker information
+    const bookerRef = database.ref(`users/${bookerId}`);
+    const bookerSnapshot = await bookerRef.once("value");
+    const booker = bookerSnapshot.val() || {};
+
+    // Get sender information
+    const senderRef = database.ref(`users/${userId}`);
+    const senderSnapshot = await senderRef.once("value");
+    const sender = senderSnapshot.val() || {};
+
+    // Store the message in the database for record keeping
+    const messageId = uuidv4();
+    const messageData = {
+      id: messageId,
+      fromUserId: userId,
+      fromUserName: sender.displayName || sender.email?.split("@")[0] || "Event Organizer",
+      toUserId: bookerId,
+      toUserName: booker.displayName || booker.email?.split("@")[0] || "Event Booker",
+      eventId,
+      eventTitle,
+      message: message,
+      sentAt: new Date().toISOString(),
+      read: false
+    };
+
+    // Store in messages collection
+    const messagesRef = database.ref("eventMessages");
+    await messagesRef.child(messageId).set(messageData);
+
+    // TODO: In a production environment, you would integrate with an email service here
+    // For now, we'll just log the message and return success
+    console.log("Event Message:", {
+      from: sender.email || userId,
+      to: booker.email || bookerId,
+      event: eventTitle,
+      message: message,
+      timestamp: new Date().toISOString()
+    });
+
+    res.status(200).json({ 
+      message: "Message sent successfully",
+      messageId: messageId
+    });
+  } catch (error) {
+    console.error("Error contacting booker:", error.message, error.stack);
+    res.status(500).json({ error: "Failed to send message" });
   }
 };
 
@@ -612,6 +845,10 @@ module.exports = {
   bookEvent,
   cancelBooking,
   getEventBookings,
+  getUserEventBookings,
+  getUserBookings,
+  getCreatedEvents,
+  contactBooker,
   getEventComments,
   createEventComment,
   createEventReply,
