@@ -2,13 +2,34 @@ const nodemailer = require('nodemailer');
 
 // Create transporter
 const createTransporter = () => {
-  return nodemailer.createTransport({
+  console.log('🔍 Email Config Debug:', {
+    EMAIL_SERVICE: process.env.EMAIL_SERVICE,
+    EMAIL_USER: process.env.EMAIL_USER,
+    EMAIL_PASSWORD: process.env.EMAIL_PASSWORD ? `${process.env.EMAIL_PASSWORD.substring(0, 10)}...` : 'undefined'
+  });
+  
+  // Gmail-specific configuration
+  const transporterConfig = {
     service: process.env.EMAIL_SERVICE || 'gmail',
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASSWORD
     }
-  });
+  };
+  
+  // Add Gmail-specific settings
+  if (process.env.EMAIL_SERVICE === 'gmail') {
+    transporterConfig.secure = true;
+    transporterConfig.port = 465;
+    transporterConfig.auth = {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASSWORD
+    };
+  }
+  
+  console.log('🔍 Email Config Debug - Transporter config:', transporterConfig);
+  
+  return nodemailer.createTransport(transporterConfig);
 };
 
 // Email templates

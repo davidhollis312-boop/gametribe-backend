@@ -1,5 +1,5 @@
 const { createTransporter, emailTemplates } = require('../config/email');
-const database = require('../config/firebase');
+const { database } = require('../config/firebase');
 
 class EmailService {
   constructor() {
@@ -58,6 +58,13 @@ class EmailService {
   // Send contact message email
   async sendContactMessage(fromUserId, toUserId, eventId, subject, message, attachments = []) {
     try {
+      console.log('🔍 EmailService Debug - Starting sendContactMessage');
+      console.log('🔍 EmailService Debug - Environment variables:', {
+        EMAIL_SERVICE: process.env.EMAIL_SERVICE,
+        EMAIL_USER: process.env.EMAIL_USER,
+        EMAIL_PASSWORD: process.env.EMAIL_PASSWORD ? 'Set' : 'Not set'
+      });
+      
       // Get sender details
       const fromUserSnapshot = await database.ref(`users/${fromUserId}`).once('value');
       const fromUser = fromUserSnapshot.val();
@@ -104,6 +111,13 @@ class EmailService {
         replyTo: fromUser.email // Allow direct reply to sender
       };
 
+      console.log('🔍 EmailService Debug - Mail options:', {
+        from: mailOptions.from,
+        to: mailOptions.to,
+        subject: mailOptions.subject,
+        hasAttachments: attachments && attachments.length > 0
+      });
+
       // Add attachments if provided
       if (attachments && attachments.length > 0) {
         mailOptions.attachments = attachments.map(attachment => ({
@@ -113,6 +127,7 @@ class EmailService {
         }));
       }
 
+      console.log('🔍 EmailService Debug - Attempting to send email...');
       const result = await this.transporter.sendMail(mailOptions);
       console.log('✅ Contact message email sent:', result.messageId);
       return result;

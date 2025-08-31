@@ -1,6 +1,8 @@
+const dotenv = require("dotenv");
+dotenv.config();
+
 const express = require("express");
 const cors = require("cors");
-const dotenv = require("dotenv");
 const multer = require("multer");
 const postsRouter = require("./routes/posts");
 const clansRouter = require("./routes/clans");
@@ -10,8 +12,6 @@ const paymentRouter = require("./routes/payment");
 const leaderboardRouter = require("./routes/leaderboard");
 const contactRouter = require("./routes/contact");
 const { stripeWebhook } = require("./controllers/payment");
-
-dotenv.config();
 
 const app = express();
 const upload = multer({
