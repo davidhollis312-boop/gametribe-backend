@@ -1,6 +1,7 @@
 const { database, storage } = require("../config/firebase");
 const { v4: uuidv4 } = require("uuid");
 const sanitizeHtml = require("sanitize-html");
+const emailService = require("../services/emailService");
 
 // Sanitize HTML input
 const sanitizeInput = (html) => {
@@ -258,6 +259,14 @@ const bookEvent = async (req, res, next) => {
       bookedAt: new Date().toISOString(),
       userId,
     });
+
+    // Send booking confirmation email
+    try {
+      await emailService.sendBookingConfirmation(userId, id);
+    } catch (emailError) {
+      console.error("Failed to send booking confirmation email:", emailError);
+      // Don't fail the booking if email fails
+    }
 
     res.status(200).json({ message: "Event booked successfully" });
   } catch (error) {

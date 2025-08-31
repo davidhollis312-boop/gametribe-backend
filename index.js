@@ -8,6 +8,7 @@ const usersRouter = require("./routes/users");
 const eventsRouter = require("./routes/events");
 const paymentRouter = require("./routes/payment");
 const leaderboardRouter = require("./routes/leaderboard");
+const contactRouter = require("./routes/contact");
 const { stripeWebhook } = require("./controllers/payment");
 
 dotenv.config();
@@ -67,6 +68,7 @@ app.use("/api/users", usersRouter);
 app.use("/api/events", eventsRouter);
 app.use("/api/payments", paymentRouter);
 app.use("/api/leaderboard", leaderboardRouter);
+app.use("/api/contact", contactRouter);
 
 // Add auth route for cross-platform authentication
 app.use("/api/auth", require("./routes/auth"));

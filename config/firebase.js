@@ -1,5 +1,5 @@
 const admin = require("firebase-admin");
-const serviceAccount = require("./firebase-adminsdk.json");
+const serviceAccount = require("../firebase-adminsdk.json");
 
 try {
   const app = admin.initializeApp({
@@ -11,7 +11,7 @@ try {
   const auth = admin.auth();
   const database = admin.database(); // Realtime Database
   const storage = admin.storage();
-  
+
   // Note: Removed Firestore since we're using Realtime Database
 
   module.exports = { auth, storage, database };
