@@ -28,18 +28,23 @@ app.use(
   cors({
     origin: [
       // Development URLs
-      "http://localhost:5173", 
+      "http://localhost:5173",
       "http://localhost:5174",
       "http://localhost:5000",
       // Production URLs (commented out for development)
-      // "https://hub.gametribe.com",
-      // "https://gametribe.com",
-      // "https://gt-server-mu.vercel.app"
+      "https://hub.gametribe.com",
+      "https://gametribe.com",
+      "https://gt-server-mu.vercel.app",
     ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-SSO-Token", "X-Community-Token"],
-    exposedHeaders: ["X-SSO-Token", "X-Community-Token"]
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-SSO-Token",
+      "X-Community-Token",
+    ],
+    exposedHeaders: ["X-SSO-Token", "X-Community-Token"],
   })
 );
 
@@ -49,7 +54,6 @@ app.post(
   "/api/payments/stripe/webhook",
   express.raw({ type: "application/json" }),
   (req, res, next) => {
-
     next();
   },
   stripeWebhook
@@ -58,8 +62,6 @@ app.post(
 // Apply global middleware AFTER webhook
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-
 
 // Mount routes
 app.use("/api/posts", postsRouter);
@@ -88,7 +90,9 @@ app.get("/api/test-firebase", async (req, res) => {
     res.json({ message: "Firebase connection working", data: snapshot.val() });
   } catch (error) {
     console.error("Firebase test error:", error);
-    res.status(500).json({ error: "Firebase connection failed", details: error.message });
+    res
+      .status(500)
+      .json({ error: "Firebase connection failed", details: error.message });
   }
 });
 
