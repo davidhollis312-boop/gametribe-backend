@@ -8,8 +8,8 @@ const getUserProfile = async (req, res) => {
     if (!userSnapshot.exists()) {
       const newUser = {
         uid: userId,
-        email: req.user.email,
-        username: req.user.email.split("@")[0],
+        email: req.user.email || "",
+        username: req.user.email && typeof req.user.email === 'string' ? req.user.email.split("@")[0] : "User",
         avatar: req.user.picture || "",
         createdAt: new Date().toISOString(),
         friendsCount: 0,

@@ -99,7 +99,7 @@ const createPost = async (req, res) => {
     const postId = uuidv4();
     const newPost = {
       authorId: userId,
-      author: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
+      author: userData.username || (userData.email ? userData.email.split("@")[0] : "Unknown User"),
       authorImage: userData.avatar || "",
       content: sanitizedContent,
       category: sanitizeInput(category) || "",
@@ -289,7 +289,7 @@ const createComment = async (req, res) => {
       id: commentId,
       postId,
       authorId: userId,
-      author: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
+      author: userData.username || (userData.email ? userData.email.split("@")[0] : "Unknown User"),
       authorImage: userData.avatar || "",
       content: sanitizedContent,
       image: attachmentUrl,
@@ -378,7 +378,7 @@ const createReply = async (req, res) => {
       postId,
       commentId,
       authorId: userId,
-      author: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
+      author: userData.username || (userData.email ? userData.email.split("@")[0] : "Unknown User"),
       authorImage: userData.avatar || "",
       content: sanitizedContent,
       image: attachmentUrl,
@@ -548,7 +548,14 @@ const repostPost = async (req, res) => {
       return res.status(404).json({ error: "User data not found" });
     }
     
-    console.log('👤 User data:', { username: userData.username, email: userData.email });
+    console.log('👤 User data:', { 
+      username: userData.username, 
+      email: userData.email,
+      hasUsername: !!userData.username,
+      hasEmail: !!userData.email,
+      emailType: typeof userData.email,
+      fullUserData: userData
+    });
 
     // Build repost chain - since we only allow reposting original content, this is always the first level
     const repostChain = [{
@@ -560,10 +567,31 @@ const repostPost = async (req, res) => {
 
     // Create repost with enhanced data structure
     const repostId = uuidv4();
+    // More robust author name logic with multiple fallbacks
+    let authorName = "Unknown User";
+    
+    if (userData.username && typeof userData.username === 'string' && userData.username.trim()) {
+      authorName = userData.username.trim();
+    } else if (userData.email && typeof userData.email === 'string' && userData.email.includes('@')) {
+      authorName = userData.email.split("@")[0];
+    } else if (userData.displayName && typeof userData.displayName === 'string' && userData.displayName.trim()) {
+      authorName = userData.displayName.trim();
+    } else {
+      // Last resort: use the user ID
+      authorName = `User_${userId.substring(0, 8)}`;
+    }
+    
+    console.log('📝 Creating repost with author name:', authorName, {
+      username: userData.username,
+      email: userData.email,
+      displayName: userData.displayName,
+      userId: userId
+    });
+    
     const repostData = {
       id: repostId, // ✅ Add the ID field
       authorId: userId,
-      author: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
+      author: authorName,
       authorImage: userData.avatar || "",
       content: comment || "", // Optional comment
       category: originalPost.category || "",
@@ -591,11 +619,23 @@ const repostPost = async (req, res) => {
       originalAuthor: originalPost.author, // Always points to the original author
     };
 
-    console.log('💾 Repost data to save:', { repostId, repostData });
+    console.log('💾 Repost data to save:', { 
+      repostId, 
+      author: repostData.author,
+      authorId: repostData.authorId,
+      hasAuthor: !!repostData.author,
+      authorType: typeof repostData.author
+    });
 
     // Save repost
     await database.ref(`posts/${repostId}`).set(repostData);
     console.log('✅ Repost saved to database');
+    
+    // Verify the data was saved correctly
+    const savedRepostRef = database.ref(`posts/${repostId}`);
+    const savedRepostSnapshot = await savedRepostRef.once("value");
+    const savedRepostData = savedRepostSnapshot.val();
+    console.log('🔍 Verification - saved repost author:', savedRepostData?.author);
 
     // Update the original post being reposted
     const newRepostedBy = [...(originalPost.repostedBy || []), userId];
@@ -626,6 +666,7 @@ const repostPost = async (req, res) => {
       message: "Post reposted successfully",
       repostId,
       repostCount: newRepostCount,
+      repostData: repostData, // Return the complete repost data
     });
   } catch (error) {
     console.error("❌ Error reposting post:", error.message, error.stack);

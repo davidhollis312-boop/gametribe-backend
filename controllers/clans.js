@@ -68,7 +68,7 @@ const createClan = async (req, res) => {
       slogan: slogan.trim(),
       logo: logoUrl,
       adminId: userId,
-      admin: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
+      admin: userData.username || (userData.email ? userData.email.split("@")[0] : "Unknown User"),
       members: [{ userId, joinedAt: new Date().toISOString() }],
       maxMembers: 50,
       isFull: false,
@@ -162,7 +162,7 @@ const getClanMembers = async (req, res) => {
         
         members.push({
           id: member.userId,
-          username: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
+          username: userData.username || (userData.email ? userData.email.split("@")[0] : "Unknown User"),
           avatar: userData.avatar || "https://via.placeholder.com/40",
           joinedAt: member.joinedAt,
           points: userData.points || 0,
@@ -645,7 +645,7 @@ const getClanPublicMembers = async (req, res) => {
         
         members.push({
           id: member.userId,
-          username: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
+          username: userData.username || (userData.email ? userData.email.split("@")[0] : "Unknown User"),
           avatar: userData.avatar || "https://via.placeholder.com/40",
           joinedAt: member.joinedAt,
           points: userData.points || 0,
