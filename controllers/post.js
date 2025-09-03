@@ -81,12 +81,14 @@ const createPost = async (req, res) => {
         return res.status(400).json({ error: "Only image and video files are allowed" });
       }
       const fileName = `posts/${Date.now()}-${file.originalname}`;
-      const fileRef = storage.bucket().file(fileName);
-      await fileRef.save(file.buffer, { contentType: file.mimetype });
-      [imageUrl] = await fileRef.getSignedUrl({
-        action: "read",
-        expires: "03-09-2491",
-      });
+      // Use unified storage utility method (handles both Firebase and fallback)
+      const uploaded = await storage.uploadFile(file, fileName);
+      if (uploaded && uploaded.url) {
+        imageUrl = uploaded.url;
+      } else if (uploaded && typeof uploaded.getSignedUrl === 'function') {
+        const [signedUrl] = await uploaded.getSignedUrl({ action: 'read', expires: '03-09-2491' });
+        imageUrl = signedUrl;
+      }
     }
     const postId = uuidv4();
     const newPost = {
@@ -492,6 +494,12 @@ const repostPost = async (req, res) => {
       isRepost: originalPost.isRepost,
       repostedBy: originalPost.repostedBy || []
     });
+
+    // Prevent reposting your own post
+    if (originalPost.authorId === userId) {
+      console.log('❌ User attempted to repost own post:', { userId, postId });
+      return res.status(400).json({ error: "You cannot repost your own post" });
+    }
     
     // NEW LOGIC: Prevent reposting of reposts
     if (originalPost.isRepost) {
@@ -764,12 +772,20 @@ const updatePost = async (req, res) => {
         return res.status(400).json({ error: "Only image and video files are allowed" });
       }
       const fileName = `posts/${Date.now()}-${file.originalname}`;
-      const fileRef = storage.bucket().file(fileName);
-      await fileRef.save(file.buffer, { contentType: file.mimetype });
-      [imageUrl] = await fileRef.getSignedUrl({
-        action: "read",
-        expires: "03-09-2491",
-      });
+      // Use the new storage utility methods
+      if (storage.isFallback) {
+        // Use fallback storage
+        const result = await storage.uploadFile(file, fileName);
+        imageUrl = result.url;
+      } else {
+        // Use Firebase Storage
+        const fileRef = storage.file(fileName);
+        await fileRef.save(file.buffer, { contentType: file.mimetype });
+        [imageUrl] = await fileRef.getSignedUrl({
+          action: "read",
+          expires: "03-09-2491",
+        });
+      }
     }
 
     // Update the post
@@ -823,13 +839,66 @@ const deletePost = async (req, res) => {
       return res.status(403).json({ error: "You can only delete your own posts" });
     }
 
-    // Delete the post
-    await postRef.remove();
+    // Handle different deletion scenarios
+    if (post.isRepost) {
+      // Case 1: Reposter is deleting their own repost
+      // Soft delete - mark as deleted but keep the post structure
+      const deletedRepost = {
+        ...post,
+        isDeleted: true,
+        deletedAt: new Date().toISOString(),
+        content: "[This repost was deleted by the author]",
+        image: "", // Remove any image
+        originalPost: post.originalPost, // Keep original post reference
+        originalPostId: post.originalPostId, // Keep original post ID
+        isRepost: true, // Keep as repost
+        repostChain: post.repostChain, // Keep repost chain
+        originalAuthor: post.originalAuthor, // Keep original author
+      };
 
-    return res.status(200).json({
-      message: "Post deleted successfully",
-      postId: postId
-    });
+      await postRef.set(deletedRepost);
+
+      return res.status(200).json({
+        message: "Repost deleted successfully",
+        postId: postId
+      });
+    } else {
+      // Case 2: Original creator is deleting their original post
+      // Before deleting the original post, promote any reposts to standalone posts
+      try {
+        const postsSnapshot = await database.ref("posts").once("value");
+        const postsData = postsSnapshot.val() || {};
+
+        const updates = {};
+        Object.entries(postsData).forEach(([id, data]) => {
+          const isRepost = !!data?.isRepost;
+          const referencesOriginal = data?.originalPostId === postId;
+          if (isRepost && referencesOriginal) {
+            // Convert repost to a standalone post while preserving reposter's own content and engagement
+            updates[`posts/${id}/isRepost`] = false;
+            updates[`posts/${id}/originalPostId`] = null;
+            updates[`posts/${id}/originalPost`] = null;
+            updates[`posts/${id}/repostChain`] = [];
+            updates[`posts/${id}/originalAuthor`] = null;
+          }
+        });
+
+        if (Object.keys(updates).length > 0) {
+          await database.ref().update(updates);
+        }
+      } catch (promoteError) {
+        // Log but do not block deletion if promotion fails; this prevents orphaned data from blocking user intent
+        console.error("Error promoting reposts to standalone posts:", promoteError);
+      }
+
+      // Hard delete the original post
+      await postRef.remove();
+
+      return res.status(200).json({
+        message: "Original post deleted successfully",
+        postId: postId
+      });
+    }
   } catch (error) {
     console.error("Error deleting post:", error.message, error.stack);
     return res.status(500).json({ error: "Failed to delete post" });

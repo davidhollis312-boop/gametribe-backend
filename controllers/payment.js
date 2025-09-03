@@ -166,7 +166,7 @@ const createStripePayment = async (req, res) => {
 const createMpesaPayment = async (req, res) => {
   try {
     const { amount, phoneNumber, userId, currency = "KES" } = req.body;
-    if (!amount || amount < 10 || amount > 10000 || !Number.isInteger(amount)) {
+    if (!amount || amount < 1 || amount > 10000 || !Number.isInteger(amount)) {
       return res.status(400).json({
         error: "Amount must be an integer between 10 and 10,000",
       });
@@ -207,7 +207,8 @@ const createMpesaPayment = async (req, res) => {
         PartyA: phoneNumber.replace("+", ""),
         PartyB: MPESA_SHORTCODE,
         PhoneNumber: phoneNumber.replace("+", ""),
-        CallBackURL: process.env.MPESA_CALLBACK_URL,
+        CallBackURL: "https://9c483f764302.ngrok-free.app/api/payments/mpesa/webhook",
+        // CallBackURL: process.env.MPESA_CALLBACK_URL,
         AccountReference: `GameTribe_${userId}`,
         TransactionDesc: "Deposit to GameTribe Wallet",
       },
@@ -432,8 +433,10 @@ const stripeWebhook = async (req, res) => {
 
 // M-Pesa webhook handler
 const mpesaWebhook = async (req, res) => {
+  let CheckoutRequestID = "unknown"; // Declare outside try block for error handling
   try {
     const { Body } = req.body;
+    console.log("M-Pesa webhook payload", req.body);
     if (!Body || !Body.stkCallback) {
       console.error("Invalid M-Pesa webhook payload", { body: req.body });
       await updateWithRetry(ref(database, `webhook_errors/mpesa_${uuidv4()}`), {
@@ -444,7 +447,8 @@ const mpesaWebhook = async (req, res) => {
     }
 
     const { stkCallback } = Body;
-    const { CheckoutRequestID, ResultCode, ResultDesc } = stkCallback;
+    const { CheckoutRequestID: requestId, ResultCode, ResultDesc } = stkCallback;
+    CheckoutRequestID = requestId; // Assign to outer scope variable
 
     const eventRef = ref(
       database,
@@ -456,14 +460,24 @@ const mpesaWebhook = async (req, res) => {
       return res.status(200).json({ received: true });
     }
 
-    const transactionQuery = query(
-      ref(database, "transactions"),
-      orderByChild("checkoutRequestId"),
-      equalTo(CheckoutRequestID)
-    );
-    const transactionSnapshot = await get(transactionQuery);
-    const transactionData = transactionSnapshot.val();
-    if (!transactionData) {
+    // Get all transactions and filter by checkoutRequestId to avoid index requirement
+    const transactionsRef = ref(database, "transactions");
+    const transactionSnapshot = await get(transactionsRef);
+    const allTransactions = transactionSnapshot.val() || {};
+    
+    // Find transaction with matching checkoutRequestId
+    let transactionId = null;
+    let transaction = null;
+    
+    for (const [id, tx] of Object.entries(allTransactions)) {
+      if (tx.checkoutRequestId === CheckoutRequestID) {
+        transactionId = id;
+        transaction = tx;
+        break;
+      }
+    }
+    
+    if (!transaction) {
       console.error(
         `Transaction with CheckoutRequestID ${CheckoutRequestID} not found`
       );
@@ -474,9 +488,6 @@ const mpesaWebhook = async (req, res) => {
       });
       return res.status(404).json({ error: "Transaction not found" });
     }
-
-    const transactionId = Object.keys(transactionData)[0];
-    const transaction = transactionData[transactionId];
 
     await updateWithRetry(eventRef, {
       processed: true,
