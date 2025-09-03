@@ -74,6 +74,12 @@ const createPost = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
     const userData = userSnapshot.val();
+    
+    // Validate user data structure
+    if (!userData) {
+      return res.status(404).json({ error: "User data not found" });
+    }
+    
     let imageUrl = sanitizeInput(imageLink) || "";
     if (req.file) {
       const file = req.file;
@@ -93,7 +99,7 @@ const createPost = async (req, res) => {
     const postId = uuidv4();
     const newPost = {
       authorId: userId,
-      author: userData.username || userData.email.split("@")[0],
+      author: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
       authorImage: userData.avatar || "",
       content: sanitizedContent,
       category: sanitizeInput(category) || "",
@@ -256,6 +262,12 @@ const createComment = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
     const userData = userSnapshot.val();
+    
+    // Validate user data structure
+    if (!userData) {
+      return res.status(404).json({ error: "User data not found" });
+    }
+    
     let attachmentUrl = "";
     if (req.file) {
       const file = req.file;
@@ -277,7 +289,7 @@ const createComment = async (req, res) => {
       id: commentId,
       postId,
       authorId: userId,
-      author: userData.username || userData.email.split("@")[0],
+      author: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
       authorImage: userData.avatar || "",
       content: sanitizedContent,
       image: attachmentUrl,
@@ -338,6 +350,12 @@ const createReply = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
     const userData = userSnapshot.val();
+    
+    // Validate user data structure
+    if (!userData) {
+      return res.status(404).json({ error: "User data not found" });
+    }
+    
     let attachmentUrl = "";
     if (req.file) {
       const file = req.file;
@@ -360,7 +378,7 @@ const createReply = async (req, res) => {
       postId,
       commentId,
       authorId: userId,
-      author: userData.username || userData.email.split("@")[0],
+      author: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
       authorImage: userData.avatar || "",
       content: sanitizedContent,
       image: attachmentUrl,
@@ -523,6 +541,13 @@ const repostPost = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
     const userData = userSnapshot.val();
+    
+    // Validate user data structure
+    if (!userData) {
+      console.log('❌ User data not found:', userId);
+      return res.status(404).json({ error: "User data not found" });
+    }
+    
     console.log('👤 User data:', { username: userData.username, email: userData.email });
 
     // Build repost chain - since we only allow reposting original content, this is always the first level
@@ -538,7 +563,7 @@ const repostPost = async (req, res) => {
     const repostData = {
       id: repostId, // ✅ Add the ID field
       authorId: userId,
-      author: userData.username || userData.email.split("@")[0],
+      author: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
       authorImage: userData.avatar || "",
       content: comment || "", // Optional comment
       category: originalPost.category || "",
@@ -1032,6 +1057,13 @@ const deletePost = async (req, res) => {
         
         if (userSnapshot.exists()) {
           const userData = userSnapshot.val();
+          
+          // Validate user data structure
+          if (!userData) {
+            console.log('⚠️ User data is null for user:', userId);
+            return;
+          }
+          
           let userUpdated = false;
           const userUpdates = {};
           

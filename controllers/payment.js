@@ -207,7 +207,7 @@ const createMpesaPayment = async (req, res) => {
         PartyA: phoneNumber.replace("+", ""),
         PartyB: MPESA_SHORTCODE,
         PhoneNumber: phoneNumber.replace("+", ""),
-        CallBackURL: "https://1607f10098ac.ngrok-free.app/api/payments/mpesa/webhook",
+        CallBackURL: "https://gametribe-backend.onrender.com/api/payments/mpesa/webhook",
         // CallBackURL: process.env.MPESA_CALLBACK_URL,
         AccountReference: `GameTribe_${userId}`,
         TransactionDesc: "Deposit to GameTribe Wallet",
