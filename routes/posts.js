@@ -16,6 +16,8 @@ const {
   repostPost,
   unrepostPost,
   getRepostChain,
+  getReposts, // ✅ NEW: Import the new getReposts function
+  cleanupOrphanedData, // ✅ NEW: Import cleanup function
 } = require("../controllers/post");
 
 const storage = multer.memoryStorage();
@@ -29,7 +31,9 @@ router.post("/:id/like", authenticate, likePost);
 router.post("/:postId/repost", authenticate, repostPost);
 router.delete("/:postId/repost", authenticate, unrepostPost);
 router.get("/:postId/repost-chain", getRepostChain);
+router.get("/:postId/reposts", getReposts); // ✅ NEW: Get reposts of a specific post
 router.get("/:postId/comments", getComments);
+router.post("/cleanup-orphaned", authenticate, cleanupOrphanedData); // ✅ NEW: Cleanup orphaned data
 router.post(
   "/:postId/comments",
   authenticate,

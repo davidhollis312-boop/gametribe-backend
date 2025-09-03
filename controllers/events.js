@@ -54,15 +54,18 @@ const createEvent = async (req, res, next) => {
 
     if (req.file) {
       const fileName = `events/${Date.now()}_${req.file.originalname}`;
-      const fileRef = storage.bucket().file(fileName);
-      await fileRef.save(req.file.buffer, {
-        metadata: { contentType: req.file.mimetype },
-      });
-      const [url] = await fileRef.getSignedUrl({
-        action: "read",
-        expires: "03-01-2500",
-      });
-      eventData.image = url;
+      // Use unified storage upload utility exposed via storage.uploadFile
+      const uploaded = await storage.uploadFile({
+        buffer: req.file.buffer,
+        mimetype: req.file.mimetype,
+        originalname: req.file.originalname
+      }, fileName);
+      if (uploaded && uploaded.url) {
+        eventData.image = uploaded.url;
+      } else if (uploaded && typeof uploaded.getSignedUrl === 'function') {
+        const [signedUrl] = await uploaded.getSignedUrl({ action: 'read', expires: '03-01-2500' });
+        eventData.image = signedUrl;
+      }
     }
 
     const eventsRef = database.ref("events");

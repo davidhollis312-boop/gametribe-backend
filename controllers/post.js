@@ -556,10 +556,10 @@ const repostPost = async (req, res) => {
         id: originalPost.id || postId, // ✅ Use postId if originalPost.id is missing
         author: originalPost.author,
         authorId: originalPost.authorId,
-        authorImage: originalPost.authorImage, // Include author image
+        authorImage: originalPost.authorImage || "", // ✅ Include author image
         content: originalPost.content,
-        image: originalPost.image,
-        category: originalPost.category,
+        image: originalPost.image || "",
+        category: originalPost.category || "",
         createdAt: originalPost.createdAt,
       },
       repostChain: repostChain, // Always just the original post since no nested reposts
@@ -658,6 +658,65 @@ const getRepostChain = async (req, res) => {
   } catch (error) {
     console.error("Error getting repost chain:", error.message, error.stack);
     return res.status(500).json({ error: "Failed to get repost chain" });
+  }
+};
+
+// ✅ NEW: Get reposts of a specific post
+const getReposts = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { page = 1, limit = 10 } = req.query;
+    
+    if (!postId) {
+      return res.status(400).json({ error: "Post ID is required" });
+    }
+
+    // Get all posts and filter for reposts of this post
+    const postsRef = database.ref("posts");
+    const snapshot = await postsRef.orderByChild("originalPostId").equalTo(postId).once("value");
+    
+    if (!snapshot.exists()) {
+      return res.status(200).json({ 
+        reposts: [],
+        totalCount: 0,
+        page: parseInt(page),
+        limit: parseInt(limit)
+      });
+    }
+
+    const repostsData = snapshot.val() || {};
+    const repostsArray = Object.entries(repostsData)
+      .map(([id, repost]) => ({
+        id,
+        ...repost,
+        author: repost.author || "Unknown Author",
+        authorImage: repost.authorImage || "",
+        content: repost.content || "",
+        createdAt: repost.createdAt || new Date().toISOString(),
+        likes: repost.likes || 0,
+        likedBy: Array.isArray(repost.likedBy) ? repost.likedBy : [],
+        comments: repost.comments || 0,
+        repostChain: Array.isArray(repost.repostChain) ? repost.repostChain : [],
+        originalAuthor: repost.originalAuthor || null,
+        originalPostId: repost.originalPostId || null,
+      }))
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    // Apply pagination
+    const startIndex = (parseInt(page) - 1) * parseInt(limit);
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedReposts = repostsArray.slice(startIndex, endIndex);
+
+    return res.status(200).json({
+      reposts: paginatedReposts,
+      totalCount: repostsArray.length,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      hasMore: endIndex < repostsArray.length
+    });
+  } catch (error) {
+    console.error("Error getting reposts:", error.message, error.stack);
+    return res.status(500).json({ error: "Failed to get reposts" });
   }
 };
 
@@ -839,10 +898,39 @@ const deletePost = async (req, res) => {
       return res.status(403).json({ error: "You can only delete your own posts" });
     }
 
+    console.log('🗑️ Starting comprehensive post deletion for:', postId);
+
     // Handle different deletion scenarios
     if (post.isRepost) {
       // Case 1: Reposter is deleting their own repost
-      // Soft delete - mark as deleted but keep the post structure
+      console.log('📝 Deleting repost:', postId);
+      
+      // Update the original post's repost counts
+      if (post.originalPostId) {
+        try {
+          const originalPostRef = database.ref(`posts/${post.originalPostId}`);
+          const originalPostSnapshot = await originalPostRef.once("value");
+          
+          if (originalPostSnapshot.exists()) {
+            const originalPost = originalPostSnapshot.val();
+            const newRepostedBy = (originalPost.repostedBy || []).filter(id => id !== userId);
+            const newDirectRepostCount = Math.max(0, (originalPost.directRepostCount || 0) - 1);
+            const newRepostCount = Math.max(0, (originalPost.repostCount || 0) - 1);
+            
+            await originalPostRef.update({
+              repostedBy: newRepostedBy,
+              directRepostCount: newDirectRepostCount,
+              repostCount: newRepostCount
+            });
+            
+            console.log('✅ Updated original post repost counts');
+          }
+        } catch (error) {
+          console.error('⚠️ Error updating original post counts:', error);
+        }
+      }
+
+      // Soft delete the repost
       const deletedRepost = {
         ...post,
         isDeleted: true,
@@ -857,6 +945,7 @@ const deletePost = async (req, res) => {
       };
 
       await postRef.set(deletedRepost);
+      console.log('✅ Repost soft deleted successfully');
 
       return res.status(200).json({
         message: "Repost deleted successfully",
@@ -864,44 +953,206 @@ const deletePost = async (req, res) => {
       });
     } else {
       // Case 2: Original creator is deleting their original post
-      // Before deleting the original post, promote any reposts to standalone posts
+      console.log('🗑️ Deleting original post and all references:', postId);
+      
+      // Step 1: Handle all reposts that reference this original post
       try {
         const postsSnapshot = await database.ref("posts").once("value");
         const postsData = postsSnapshot.val() || {};
 
         const updates = {};
+        let repostCount = 0;
+        
         Object.entries(postsData).forEach(([id, data]) => {
           const isRepost = !!data?.isRepost;
           const referencesOriginal = data?.originalPostId === postId;
+          
           if (isRepost && referencesOriginal) {
-            // Convert repost to a standalone post while preserving reposter's own content and engagement
-            updates[`posts/${id}/isRepost`] = false;
-            updates[`posts/${id}/originalPostId`] = null;
-            updates[`posts/${id}/originalPost`] = null;
-            updates[`posts/${id}/repostChain`] = [];
-            updates[`posts/${id}/originalAuthor`] = null;
+            repostCount++;
+            console.log(`📝 Updating repost ${id} - marking original as deleted`);
+            
+            // Create a proper deleted original post structure
+            const deletedOriginalPost = {
+              id: postId,
+              author: post.author || "Unknown Author",
+              authorId: post.authorId || null,
+              authorImage: post.authorImage || "",
+              content: "[Original post deleted by the author]",
+              image: "",
+              category: post.category || "",
+              createdAt: post.createdAt || new Date().toISOString(),
+              isDeleted: true,
+              deletedAt: new Date().toISOString()
+            };
+            
+            // Update repost to reference deleted original
+            updates[`posts/${id}/originalDeleted`] = true;
+            updates[`posts/${id}/originalPost`] = deletedOriginalPost;
+            updates[`posts/${id}/originalPostId`] = postId; // Keep reference for traceability
+            
+            // If the repost has no own content, add a placeholder
+            if (!data.content || data.content.trim() === "") {
+              updates[`posts/${id}/content`] = "[Original post deleted]";
+            }
           }
         });
 
+        console.log(`🔄 Found ${repostCount} reposts to update`);
         if (Object.keys(updates).length > 0) {
           await database.ref().update(updates);
+          console.log('✅ Successfully updated all reposts');
         }
-      } catch (promoteError) {
-        // Log but do not block deletion if promotion fails; this prevents orphaned data from blocking user intent
-        console.error("Error promoting reposts to standalone posts:", promoteError);
+      } catch (error) {
+        console.error("Error updating reposts after original deletion:", error);
       }
 
-      // Hard delete the original post
+      // Step 2: Delete all comments associated with this post
+      try {
+        const commentsRef = database.ref(`posts/${postId}/comments`);
+        const commentsSnapshot = await commentsRef.once("value");
+        
+        if (commentsSnapshot.exists()) {
+          const commentsData = commentsSnapshot.val();
+          const commentCount = Object.keys(commentsData).length;
+          console.log(`🗑️ Deleting ${commentCount} comments for post ${postId}`);
+          
+          // Delete all comments and their replies
+          await commentsRef.remove();
+          console.log('✅ All comments deleted successfully');
+        }
+      } catch (error) {
+        console.error("Error deleting comments:", error);
+      }
+
+      // Step 3: Clean up any user profile references (if they exist)
+      try {
+        // Check if user profiles store post references
+        const userRef = database.ref(`users/${userId}`);
+        const userSnapshot = await userRef.once("value");
+        
+        if (userSnapshot.exists()) {
+          const userData = userSnapshot.val();
+          let userUpdated = false;
+          const userUpdates = {};
+          
+          // Check for post references in user data (if any exist)
+          // This is a placeholder for future user profile post references
+          if (userData.posts && Array.isArray(userData.posts)) {
+            const updatedPosts = userData.posts.filter(p => p !== postId);
+            if (updatedPosts.length !== userData.posts.length) {
+              userUpdates.posts = updatedPosts;
+              userUpdated = true;
+            }
+          }
+          
+          if (userUpdated) {
+            await userRef.update(userUpdates);
+            console.log('✅ Cleaned up user profile references');
+          }
+        }
+      } catch (error) {
+        console.error("Error cleaning up user profile references:", error);
+      }
+
+      // Step 4: Clean up points system references (if they exist)
+      try {
+        // Check if points system stores post references
+        const pointsRef = database.ref("points");
+        const pointsSnapshot = await pointsRef.once("value");
+        
+        if (pointsSnapshot.exists()) {
+          const pointsData = pointsSnapshot.val();
+          const updates = {};
+          let pointsUpdated = false;
+          
+          Object.entries(pointsData).forEach(([userId, userPoints]) => {
+            if (userPoints && Array.isArray(userPoints)) {
+              const updatedPoints = userPoints.filter(point => 
+                !point.postId || point.postId !== postId
+              );
+              if (updatedPoints.length !== userPoints.length) {
+                updates[`points/${userId}`] = updatedPoints;
+                pointsUpdated = true;
+              }
+            }
+          });
+          
+          if (pointsUpdated) {
+            await database.ref().update(updates);
+            console.log('✅ Cleaned up points system references');
+          }
+        }
+      } catch (error) {
+        console.error("Error cleaning up points references:", error);
+      }
+
+      // Step 5: Finally, delete the original post itself
       await postRef.remove();
+      console.log('✅ Original post deleted successfully');
 
       return res.status(200).json({
-        message: "Original post deleted successfully",
-        postId: postId
+        message: "Original post and all references deleted successfully",
+        postId: postId,
+        deletedAt: new Date().toISOString()
       });
     }
   } catch (error) {
     console.error("Error deleting post:", error.message, error.stack);
     return res.status(500).json({ error: "Failed to delete post" });
+  }
+};
+
+// ✅ NEW: Cleanup function to remove orphaned data
+const cleanupOrphanedData = async (req, res) => {
+  try {
+    console.log('🧹 Starting orphaned data cleanup...');
+    
+    // Get all posts
+    const postsSnapshot = await database.ref("posts").once("value");
+    const postsData = postsSnapshot.val() || {};
+    
+    const updates = {};
+    let cleanupCount = 0;
+    
+    // Check for reposts that reference non-existent original posts
+    Object.entries(postsData).forEach(([id, post]) => {
+      if (post.isRepost && post.originalPostId) {
+        const originalPostExists = postsData[post.originalPostId];
+        
+        if (!originalPostExists) {
+          console.log(`🧹 Found orphaned repost ${id} referencing non-existent post ${post.originalPostId}`);
+          
+          // Mark as orphaned
+          updates[`posts/${id}/isOrphaned`] = true;
+          updates[`posts/${id}/originalDeleted`] = true;
+          updates[`posts/${id}/content`] = "[Original post no longer exists]";
+          updates[`posts/${id}/originalPost`] = {
+            id: post.originalPostId,
+            author: "Unknown Author",
+            content: "[Original post no longer exists]",
+            isDeleted: true,
+            deletedAt: new Date().toISOString()
+          };
+          
+          cleanupCount++;
+        }
+      }
+    });
+    
+    if (Object.keys(updates).length > 0) {
+      await database.ref().update(updates);
+      console.log(`✅ Cleaned up ${cleanupCount} orphaned reposts`);
+    } else {
+      console.log('✅ No orphaned data found');
+    }
+    
+    return res.status(200).json({
+      message: "Orphaned data cleanup completed",
+      cleanedCount: cleanupCount
+    });
+  } catch (error) {
+    console.error("Error during cleanup:", error.message, error.stack);
+    return res.status(500).json({ error: "Failed to cleanup orphaned data" });
   }
 };
 
@@ -919,4 +1170,6 @@ module.exports = {
   repostPost,
   unrepostPost,
   getRepostChain,
+  getReposts, // ✅ NEW: Export the new getReposts function
+  cleanupOrphanedData, // ✅ NEW: Export cleanup function
 };
