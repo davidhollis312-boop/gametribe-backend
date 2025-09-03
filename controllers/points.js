@@ -15,6 +15,7 @@ const POINTS_CONFIG = {
   FIRST_POST: 10,          // First post bonus
   FIRST_COMMENT: 5,        // First comment bonus
   FIRST_LIKE: 2,           // First like bonus
+  REPOST_POST: 2,          // Reposting a post
 };
 
 // Add points to user

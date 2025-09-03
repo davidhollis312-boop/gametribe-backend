@@ -37,6 +37,12 @@ const createClan = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
     const userData = userSnapshot.val();
+    
+    // Validate user data structure
+    if (!userData) {
+      return res.status(404).json({ error: "User data not found" });
+    }
+    
     let logoUrl = "https://via.placeholder.com/40";
     if (req.file) {
       const file = req.file;
@@ -62,7 +68,7 @@ const createClan = async (req, res) => {
       slogan: slogan.trim(),
       logo: logoUrl,
       adminId: userId,
-      admin: userData.username || userData.email.split("@")[0],
+      admin: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
       members: [{ userId, joinedAt: new Date().toISOString() }],
       maxMembers: 50,
       isFull: false,
@@ -147,9 +153,16 @@ const getClanMembers = async (req, res) => {
       const userSnapshot = await userRef.once("value");
       if (userSnapshot.exists()) {
         const userData = userSnapshot.val();
+        
+        // Validate user data structure
+        if (!userData) {
+          console.log('⚠️ User data is null for user:', member.userId);
+          continue;
+        }
+        
         members.push({
           id: member.userId,
-          username: userData.username || userData.email.split("@")[0],
+          username: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
           avatar: userData.avatar || "https://via.placeholder.com/40",
           joinedAt: member.joinedAt,
           points: userData.points || 0,
@@ -623,9 +636,16 @@ const getClanPublicMembers = async (req, res) => {
       const userSnapshot = await userRef.once("value");
       if (userSnapshot.exists()) {
         const userData = userSnapshot.val();
+        
+        // Validate user data structure
+        if (!userData) {
+          console.log('⚠️ User data is null for user:', member.userId);
+          continue;
+        }
+        
         members.push({
           id: member.userId,
-          username: userData.username || userData.email.split("@")[0],
+          username: userData.username || userData.email ? userData.email.split("@")[0] : "Unknown User",
           avatar: userData.avatar || "https://via.placeholder.com/40",
           joinedAt: member.joinedAt,
           points: userData.points || 0,
