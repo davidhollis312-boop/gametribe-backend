@@ -1,0 +1,88 @@
+{
+  "rules": {
+    "posts": {
+      ".indexOn": [
+        "createdAt",
+        "authorId", 
+        "category",
+        "isRepost",
+        "originalPostId",
+        "likes",
+        "comments",
+        "repostCount"
+      ],
+      "$postId": {
+        "comments": {
+          ".indexOn": [
+            "createdAt",
+            "authorId",
+            "likes"
+          ]
+        }
+      }
+    },
+    "users": {
+      ".indexOn": [
+        "username",
+        "email", 
+        "createdAt",
+        "lastActive",
+        "points",
+        "games"
+      ],
+      "$userId": {
+        "posts": {
+          ".indexOn": ["createdAt"]
+        },
+        "friends": {
+          ".indexOn": ["addedAt"]
+        }
+      }
+    },
+    "clans": {
+      ".indexOn": [
+        "name",
+        "createdAt",
+        "memberCount",
+        "category"
+      ]
+    },
+    "events": {
+      ".indexOn": [
+        "startDate",
+        "endDate",
+        "category",
+        "status",
+        "createdAt"
+      ]
+    },
+    "leaderboard": {
+      ".indexOn": [
+        "points",
+        "games",
+        "updatedAt"
+      ]
+    },
+    "analytics": {
+      ".indexOn": [
+        "date",
+        "type",
+        "category"
+      ]
+    },
+    "search": {
+      ".indexOn": [
+        "term",
+        "timestamp",
+        "type"
+      ]
+    },
+    "cache": {
+      ".indexOn": [
+        "key",
+        "expiresAt",
+        "type"
+      ]
+    }
+  }
+}

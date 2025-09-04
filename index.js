@@ -13,6 +13,10 @@ const leaderboardRouter = require("./routes/leaderboard");
 const contactRouter = require("./routes/contact");
 const { stripeWebhook } = require("./controllers/payment");
 
+// ✅ NEW: Import production-grade routes
+const analyticsRouter = require("./routes/analytics");
+const searchRouter = require("./routes/search");
+
 const app = express();
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -71,6 +75,10 @@ app.use("/api/events", eventsRouter);
 app.use("/api/payments", paymentRouter);
 app.use("/api/leaderboard", leaderboardRouter);
 app.use("/api/contact", contactRouter);
+
+// ✅ NEW: Mount production-grade routes
+app.use("/api/analytics", analyticsRouter);
+app.use("/api/search", searchRouter);
 
 // Add auth route for cross-platform authentication
 app.use("/api/auth", require("./routes/auth"));

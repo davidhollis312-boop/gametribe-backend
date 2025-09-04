@@ -6,6 +6,13 @@ const window = new JSDOM("").window;
 const purify = DOMPurify(window);
 const { processPointsForAction } = require("./points");
 
+// ✅ NEW: Import production-grade services
+const cacheService = require("../services/cache");
+const batchOperationsService = require("../services/batchOperations");
+const contentModerationService = require("../services/contentModeration");
+const monitoringService = require("../services/monitoring");
+const searchService = require("../services/search");
+
 // Sanitize input to prevent XSS or invalid data and remove unnecessary HTML tags
 const sanitizeInput = (input) => {
   if (typeof input !== "string") return input;
@@ -20,13 +27,77 @@ const sanitizeInput = (input) => {
   return sanitized;
 };
 
+// ✅ NEW: URL validation helper
+const isValidUrl = (string) => {
+  try {
+    new URL(string);
+    return true;
+  } catch (_) {
+    return false;
+  }
+};
+
+// ✅ NEW: Content moderation helper
+const containsInappropriateContent = (content) => {
+  const inappropriateWords = [
+    'spam', 'scam', 'fake', 'hate', 'abuse', 'harassment',
+    'discrimination', 'violence', 'illegal', 'fraud'
+  ];
+  
+  const lowerContent = content.toLowerCase();
+  return inappropriateWords.some(word => lowerContent.includes(word));
+};
+
 const getPosts = async (req, res) => {
+  const startTime = Date.now();
   try {
     const userId = req.user?.uid;
+    const { page = 1, limit = 20, category, authorId, lastPostId } = req.query;
+    
+    // ✅ NEW: Input validation
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    
+    if (pageNum < 1 || limitNum < 1 || limitNum > 100) {
+      return res.status(400).json({ 
+        error: "Invalid pagination parameters. Page must be >= 1, limit must be between 1-100" 
+      });
+    }
+    
+    // ✅ NEW: Check cache first
+    const cacheKey = `posts:${pageNum}:${limitNum}:${category || 'all'}:${authorId || 'all'}`;
+    const cachedPosts = await cacheService.getPosts(pageNum, limitNum, category, authorId);
+    
+    if (cachedPosts) {
+      monitoringService.trackCacheHit('posts');
+      monitoringService.trackHttpRequest(req.method, req.route?.path || '/api/posts', 200, Date.now() - startTime);
+      return res.status(200).json(cachedPosts);
+    }
+    
+    monitoringService.trackCacheMiss('posts');
+    
     const postsRef = database.ref("posts");
-    const snapshot = await postsRef.orderByChild("createdAt").once("value");
+    let query = postsRef.orderByChild("createdAt");
+    
+    // ✅ NEW: Implement pagination with cursor-based approach
+    if (lastPostId) {
+      // Get the timestamp of the last post for cursor-based pagination
+      const lastPostRef = database.ref(`posts/${lastPostId}`);
+      const lastPostSnapshot = await lastPostRef.once("value");
+      if (lastPostSnapshot.exists()) {
+        const lastPost = lastPostSnapshot.val();
+        query = query.endAt(lastPost.createdAt);
+      }
+    }
+    
+    // Limit results
+    query = query.limitToLast(limitNum + 1); // +1 to check if there are more posts
+    
+    const snapshot = await query.once("value");
     const postsData = snapshot.val() || {};
-    const posts = Object.entries(postsData).map(([id, data]) => ({
+    
+    // Convert to array and sort
+    let posts = Object.entries(postsData).map(([id, data]) => ({
       id,
       ...data,
       likes: data.likes || 0,
@@ -46,8 +117,43 @@ const getPosts = async (req, res) => {
       originalAuthor: data.originalAuthor || null,
       originalPostId: data.originalPostId || null,
     }));
+    
     posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    return res.status(200).json({ posts });
+    
+    // ✅ NEW: Check if there are more posts
+    const hasMore = posts.length > limitNum;
+    if (hasMore) {
+      posts = posts.slice(0, limitNum); // Remove the extra post
+    }
+    
+    // ✅ NEW: Apply filters
+    if (category) {
+      posts = posts.filter(post => post.category === category);
+    }
+    
+    if (authorId) {
+      posts = posts.filter(post => post.authorId === authorId);
+    }
+    
+    const response = { 
+      posts,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        hasMore,
+        total: posts.length,
+        lastPostId: posts.length > 0 ? posts[posts.length - 1].id : null
+      }
+    };
+    
+    // ✅ NEW: Cache the results
+    await cacheService.setPosts(response, pageNum, limitNum, category, authorId);
+    
+    // ✅ NEW: Track metrics
+    monitoringService.trackDatabaseOperation('read', 'posts', Date.now() - startTime);
+    monitoringService.trackHttpRequest(req.method, req.route?.path || '/api/posts', 200, Date.now() - startTime);
+    
+    return res.status(200).json(response);
   } catch (error) {
     console.error("Error fetching posts:", error.message, error.stack);
     return res.status(500).json({ error: "Failed to fetch posts" });
@@ -58,15 +164,45 @@ const createPost = async (req, res) => {
   try {
     const userId = req.user.uid;
     const { content, category, imageLink } = req.body;
-    if (
-      !content ||
-      typeof content !== "string" ||
-      content.trim().length === 0
-    ) {
+    
+    // ✅ NEW: Enhanced input validation
+    if (!content || typeof content !== "string" || content.trim().length === 0) {
       return res.status(400).json({
         error: "Post content is required and must be a non-empty string",
       });
     }
+    
+    if (content.length > 2000) {
+      return res.status(400).json({
+        error: "Post content cannot exceed 2000 characters",
+      });
+    }
+    
+    if (category && (typeof category !== "string" || category.length > 50)) {
+      return res.status(400).json({
+        error: "Category must be a string with maximum 50 characters",
+      });
+    }
+    
+    if (imageLink && (typeof imageLink !== "string" || !isValidUrl(imageLink))) {
+      return res.status(400).json({
+        error: "Image link must be a valid URL",
+      });
+    }
+    
+    // ✅ NEW: Advanced content moderation
+    const moderationResult = await contentModerationService.moderateContent(content, 'post', userId);
+    
+    if (!moderationResult.isApproved) {
+      monitoringService.trackContentFlagged('inappropriate', moderationResult.severity);
+      return res.status(400).json({
+        error: "Post content violates community guidelines",
+        details: moderationResult.reasons,
+        flags: moderationResult.flags
+      });
+    }
+    
+    monitoringService.trackContentModerated('post', 'approved');
     const sanitizedContent = sanitizeInput(content);
     const userRef = database.ref(`users/${userId}`);
     const userSnapshot = await userRef.once("value");
@@ -144,6 +280,14 @@ const createPost = async (req, res) => {
     };
     await database.ref(`posts/${postId}`).set(newPost);
     
+    // ✅ NEW: Invalidate cache
+    await cacheService.invalidatePosts();
+    await cacheService.setPost(postId, newPost);
+    
+    // ✅ NEW: Track metrics
+    monitoringService.trackPostCreated(newPost.category, 'regular');
+    monitoringService.trackDatabaseOperation('create', 'posts');
+    
     // Add points for creating a post
     try {
       await processPointsForAction(userId, "POST_DISCUSSION", {
@@ -152,6 +296,7 @@ const createPost = async (req, res) => {
       });
     } catch (pointsError) {
       console.error("Error adding points for post creation:", pointsError);
+      monitoringService.trackError('points_system_error', 'low');
       // Don't fail the post creation if points fail
     }
     

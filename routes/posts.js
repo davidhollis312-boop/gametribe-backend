@@ -3,6 +3,13 @@ const router = express.Router();
 const multer = require("multer");
 const authenticate = require("../middleware/auth");
 const {
+  postCreationLimiter,
+  likeLimiter,
+  commentLimiter,
+  repostLimiter,
+  generalLimiter
+} = require("../middleware/rateLimiter");
+const {
   getPosts,
   createPost,
   updatePost,
@@ -23,13 +30,13 @@ const {
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-router.get("/", getPosts);
-router.post("/", authenticate, upload.single("image"), createPost);
-router.put("/:postId", authenticate, upload.single("image"), updatePost);
+router.get("/", generalLimiter, getPosts);
+router.post("/", authenticate, postCreationLimiter, upload.single("image"), createPost);
+router.put("/:postId", authenticate, postCreationLimiter, upload.single("image"), updatePost);
 router.delete("/:postId", authenticate, deletePost);
-router.post("/:id/like", authenticate, likePost);
-router.post("/:postId/repost", authenticate, repostPost);
-router.delete("/:postId/repost", authenticate, unrepostPost);
+router.post("/:id/like", authenticate, likeLimiter, likePost);
+router.post("/:postId/repost", authenticate, repostLimiter, repostPost);
+router.delete("/:postId/repost", authenticate, repostLimiter, unrepostPost);
 router.get("/:postId/repost-chain", getRepostChain);
 router.get("/:postId/reposts", getReposts); // ✅ NEW: Get reposts of a specific post
 router.get("/:postId/comments", getComments);
@@ -37,6 +44,7 @@ router.post("/cleanup-orphaned", authenticate, cleanupOrphanedData); // ✅ NEW:
 router.post(
   "/:postId/comments",
   authenticate,
+  commentLimiter,
   upload.single("attachment"),
   (req, res, next) => {
     next();
@@ -46,6 +54,7 @@ router.post(
 router.post(
   "/:postId/comments/:commentId/replies",
   authenticate,
+  commentLimiter,
   upload.single("attachment"),
   (req, res, next) => {
 
@@ -53,10 +62,11 @@ router.post(
   },
   createReply
 );
-router.put("/:postId/comments/:commentId/like", authenticate, likeComment);
+router.put("/:postId/comments/:commentId/like", authenticate, likeLimiter, likeComment);
 router.put(
   "/:postId/comments/:commentId/replies/:replyId/like",
   authenticate,
+  likeLimiter,
   likeReply
 );
 

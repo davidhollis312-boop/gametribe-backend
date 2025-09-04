@@ -10,7 +10,7 @@ try {
   });
 
   const auth = admin.auth();
-  const database = admin.database(); // Realtime Database
+  const database = admin.database(); // Realtime Da.tabase
   
   // Initialize storage with error handling
   const storage = initializeStorage();
