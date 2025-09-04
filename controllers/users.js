@@ -9,8 +9,9 @@ const getUserProfile = async (req, res) => {
       const newUser = {
         uid: userId,
         email: req.user.email || "",
-        username: req.user.email && typeof req.user.email === 'string' ? req.user.email.split("@")[0] : "User",
+        username: req.user.name || (req.user.email && typeof req.user.email === 'string' ? req.user.email.split("@")[0] : "User"),
         avatar: req.user.picture || "",
+        bio: "",
         createdAt: new Date().toISOString(),
         friendsCount: 0,
         friends: [],
@@ -29,16 +30,17 @@ const getUserProfile = async (req, res) => {
 const updateUserProfile = async (req, res) => {
   try {
     const userId = req.user.uid;
-    const { username, avatar } = req.body;
-    if (!username && !avatar) {
+    const { username, avatar, bio } = req.body;
+    if (!username && !avatar && !bio) {
       return res
         .status(400)
-        .json({ error: "At least one field (username or avatar) is required" });
+        .json({ error: "At least one field (username, avatar, or bio) is required" });
     }
     const userRef = database.ref(`users/${userId}`);
     const updateData = {};
     if (username) updateData.username = username;
     if (avatar) updateData.avatar = avatar;
+    if (bio !== undefined) updateData.bio = bio;
     await userRef.update(updateData);
     return res.status(200).json({ message: "Profile updated successfully" });
   } catch (error) {

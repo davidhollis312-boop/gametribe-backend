@@ -477,8 +477,9 @@ const getUserProfile = async (req, res) => {
       const newUser = {
         uid: userId,
         email: req.user.email,
-        username: req.user.email.split("@")[0],
-        avatar: "https://via.placeholder.com/40",
+        username: req.user.name || req.user.email.split("@")[0],
+        avatar: req.user.picture || "https://via.placeholder.com/40",
+        bio: "",
         createdAt: new Date().toISOString(),
         clans: [],
         friendsCount: 0,

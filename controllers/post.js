@@ -80,6 +80,31 @@ const createPost = async (req, res) => {
       return res.status(404).json({ error: "User data not found" });
     }
     
+    // Ensure user has proper username - prioritize Google displayName
+    if (!userData.username || userData.username === "User" || userData.username.trim() === "") {
+      let fallbackUsername;
+      
+      // Priority order: Google displayName > email prefix > user ID
+      if (req.user.name && req.user.name.trim()) {
+        fallbackUsername = req.user.name.trim();
+      } else if (userData.email && userData.email.includes('@')) {
+        fallbackUsername = userData.email.split("@")[0];
+      } else {
+        fallbackUsername = `User_${userId.substring(0, 8)}`;
+      }
+      
+      // Update the user's username in the database
+      await userRef.update({ username: fallbackUsername });
+      userData.username = fallbackUsername;
+      
+      console.log('🔧 Updated user username in post creation:', { 
+        userId, 
+        newUsername: fallbackUsername,
+        googleName: req.user.name,
+        email: userData.email
+      });
+    }
+    
     let imageUrl = sanitizeInput(imageLink) || "";
     if (req.file) {
       const file = req.file;
@@ -99,7 +124,7 @@ const createPost = async (req, res) => {
     const postId = uuidv4();
     const newPost = {
       authorId: userId,
-      author: userData.username || (userData.email ? userData.email.split("@")[0] : "Unknown User"),
+      author: userData.username,
       authorImage: userData.avatar || "",
       content: sanitizedContent,
       category: sanitizeInput(category) || "",
@@ -548,6 +573,31 @@ const repostPost = async (req, res) => {
       return res.status(404).json({ error: "User data not found" });
     }
     
+    // Ensure user has proper username - prioritize Google displayName
+    if (!userData.username || userData.username === "User" || userData.username.trim() === "") {
+      let fallbackUsername;
+      
+      // Priority order: Google displayName > email prefix > user ID
+      if (req.user.name && req.user.name.trim()) {
+        fallbackUsername = req.user.name.trim();
+      } else if (userData.email && userData.email.includes('@')) {
+        fallbackUsername = userData.email.split("@")[0];
+      } else {
+        fallbackUsername = `User_${userId.substring(0, 8)}`;
+      }
+      
+      // Update the user's username in the database
+      await userRef.update({ username: fallbackUsername });
+      userData.username = fallbackUsername;
+      
+      console.log('🔧 Updated user username in repost creation:', { 
+        userId, 
+        newUsername: fallbackUsername,
+        googleName: req.user.name,
+        email: userData.email
+      });
+    }
+    
     console.log('👤 User data:', { 
       username: userData.username, 
       email: userData.email,
@@ -567,19 +617,8 @@ const repostPost = async (req, res) => {
 
     // Create repost with enhanced data structure
     const repostId = uuidv4();
-    // More robust author name logic with multiple fallbacks
-    let authorName = "Unknown User";
-    
-    if (userData.username && typeof userData.username === 'string' && userData.username.trim()) {
-      authorName = userData.username.trim();
-    } else if (userData.email && typeof userData.email === 'string' && userData.email.includes('@')) {
-      authorName = userData.email.split("@")[0];
-    } else if (userData.displayName && typeof userData.displayName === 'string' && userData.displayName.trim()) {
-      authorName = userData.displayName.trim();
-    } else {
-      // Last resort: use the user ID
-      authorName = `User_${userId.substring(0, 8)}`;
-    }
+    // Use the username we just ensured exists
+    const authorName = userData.username || `User_${userId.substring(0, 8)}`;
     
     console.log('📝 Creating repost with author name:', authorName, {
       username: userData.username,
