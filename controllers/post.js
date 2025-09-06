@@ -242,11 +242,33 @@ const createPost = async (req, res) => {
     }
     
     let imageUrl = sanitizeInput(imageLink) || "";
+    let mediaType = "image"; // Default to image
+    let duration = null; // For videos
+    
     if (req.file) {
       const file = req.file;
       if (!file.mimetype.startsWith("image/") && !file.mimetype.startsWith("video/")) {
         return res.status(400).json({ error: "Only image and video files are allowed" });
       }
+      
+      // For videos, validate duration (20 minutes max)
+      if (file.mimetype.startsWith("video/")) {
+        mediaType = "video";
+        
+        // Check if duration is provided in the request
+        if (req.body.duration) {
+          const videoDuration = parseFloat(req.body.duration);
+          const maxDuration = 20 * 60; // 20 minutes in seconds
+          
+          if (videoDuration > maxDuration) {
+            return res.status(400).json({ 
+              error: `Video duration must be less than 20 minutes. Current duration: ${Math.round(videoDuration / 60)} minutes.` 
+            });
+          }
+          duration = videoDuration;
+        }
+      }
+      
       const fileName = `posts/${Date.now()}-${file.originalname}`;
       // Use unified storage utility method (handles both Firebase and fallback)
       const uploaded = await storage.uploadFile(file, fileName);
@@ -256,6 +278,12 @@ const createPost = async (req, res) => {
         const [signedUrl] = await uploaded.getSignedUrl({ action: 'read', expires: '03-09-2491' });
         imageUrl = signedUrl;
       }
+    } else if (imageLink) {
+      // For URL-based media, determine type from extension
+      const url = new URL(imageLink);
+      const extension = url.pathname.split('.').pop().toLowerCase();
+      const videoExtensions = ['mp4', 'webm', 'ogg', 'mov', 'avi'];
+      mediaType = videoExtensions.includes(extension) ? 'video' : 'image';
     }
     const postId = uuidv4();
     const newPost = {
@@ -265,6 +293,8 @@ const createPost = async (req, res) => {
       content: sanitizedContent,
       category: sanitizeInput(category) || "",
       image: imageUrl,
+      mediaType: mediaType,
+      duration: duration,
       createdAt: new Date().toISOString(),
       comments: 0,
       likes: 0,
@@ -1080,6 +1110,21 @@ const updatePost = async (req, res) => {
       if (!file.mimetype.startsWith("image/") && !file.mimetype.startsWith("video/")) {
         return res.status(400).json({ error: "Only image and video files are allowed" });
       }
+      
+      // For videos, validate duration (20 minutes max)
+      if (file.mimetype.startsWith("video/")) {
+        if (req.body.duration) {
+          const videoDuration = parseFloat(req.body.duration);
+          const maxDuration = 20 * 60; // 20 minutes in seconds
+          
+          if (videoDuration > maxDuration) {
+            return res.status(400).json({ 
+              error: `Video duration must be less than 20 minutes. Current duration: ${Math.round(videoDuration / 60)} minutes.` 
+            });
+          }
+        }
+      }
+      
       const fileName = `posts/${Date.now()}-${file.originalname}`;
       // Use the new storage utility methods
       if (storage.isFallback) {
@@ -1097,11 +1142,41 @@ const updatePost = async (req, res) => {
       }
     }
 
+    // Determine media type and duration for updated post
+    let mediaType = post.mediaType || "image";
+    let duration = post.duration || null;
+    
+    if (req.file) {
+      if (req.file.mimetype.startsWith("video/")) {
+        mediaType = "video";
+        if (req.body.duration) {
+          duration = parseFloat(req.body.duration);
+        }
+      } else {
+        mediaType = "image";
+        duration = null;
+      }
+    } else if (imageLink) {
+      // For URL-based media, determine type from extension
+      try {
+        const url = new URL(imageLink);
+        const extension = url.pathname.split('.').pop().toLowerCase();
+        const videoExtensions = ['mp4', 'webm', 'ogg', 'mov', 'avi'];
+        mediaType = videoExtensions.includes(extension) ? 'video' : 'image';
+        duration = null; // Duration not available for URL-based media
+      } catch (e) {
+        mediaType = "image";
+        duration = null;
+      }
+    }
+
     // Update the post
     const updatedPost = {
       content: sanitizedContent,
       category: sanitizeInput(category) || post.category || "",
       image: imageUrl,
+      mediaType: mediaType,
+      duration: duration,
       updatedAt: new Date().toISOString(),
     };
 
