@@ -194,11 +194,19 @@ const sendGroupMessage = async (req, res) => {
       }
       
       const file = req.file;
-      if (!file.mimetype.startsWith("image/")) {
-        return res.status(400).json({ error: "Attachment must be an image" });
+      // Allow images, videos, and documents
+      const allowedTypes = ['image/', 'video/', 'application/pdf', 'text/', 'application/'];
+      const isAllowedType = allowedTypes.some(type => file.mimetype.startsWith(type));
+      
+      if (!isAllowedType) {
+        return res.status(400).json({ error: "Unsupported file type. Please upload images, videos, PDFs, or text files." });
       }
-      if (file.size > 5 * 1024 * 1024) {
-        return res.status(400).json({ error: "Attachment size must be less than 5MB" });
+      
+      // Increase size limit for videos and documents
+      const maxSize = file.mimetype.startsWith('video/') ? 50 * 1024 * 1024 : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
+      if (file.size > maxSize) {
+        const maxSizeMB = maxSize / (1024 * 1024);
+        return res.status(400).json({ error: `File size must be less than ${maxSizeMB}MB` });
       }
       
       const fileName = `clans/${clanId}/messages/${Date.now()}-${file.originalname}`;
@@ -235,14 +243,22 @@ const sendGroupMessage = async (req, res) => {
     let attachmentUrl = "";
     if (req.file) {
       const file = req.file;
-      if (!file.mimetype.startsWith("image/")) {
-        return res.status(400).json({ error: "Attachment must be an image" });
+      
+      // Allow images, videos, and documents (same as uploadOnly section)
+      const allowedTypes = ['image/', 'video/', 'application/pdf', 'text/', 'application/'];
+      const isAllowedType = allowedTypes.some(type => file.mimetype.startsWith(type));
+      
+      if (!isAllowedType) {
+        return res.status(400).json({ error: "Unsupported file type. Please upload images, videos, PDFs, or text files." });
       }
-      if (file.size > 5 * 1024 * 1024) {
-        return res
-          .status(400)
-          .json({ error: "Attachment size must be less than 5MB" });
+      
+      // Increase size limit for videos and documents
+      const maxSize = file.mimetype.startsWith('video/') ? 50 * 1024 * 1024 : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
+      if (file.size > maxSize) {
+        const maxSizeMB = maxSize / (1024 * 1024);
+        return res.status(400).json({ error: `File size must be less than ${maxSizeMB}MB` });
       }
+      
       const fileName = `clans/${clanId}/messages/${Date.now()}-${
         file.originalname
       }`;
@@ -318,11 +334,19 @@ const sendDirectMessage = async (req, res) => {
       }
       
       const file = req.file;
-      if (!file.mimetype.startsWith("image/")) {
-        return res.status(400).json({ error: "Attachment must be an image" });
+      // Allow images, videos, and documents
+      const allowedTypes = ['image/', 'video/', 'application/pdf', 'text/', 'application/'];
+      const isAllowedType = allowedTypes.some(type => file.mimetype.startsWith(type));
+      
+      if (!isAllowedType) {
+        return res.status(400).json({ error: "Unsupported file type. Please upload images, videos, PDFs, or text files." });
       }
-      if (file.size > 5 * 1024 * 1024) {
-        return res.status(400).json({ error: "Attachment size must be less than 5MB" });
+      
+      // Increase size limit for videos and documents
+      const maxSize = file.mimetype.startsWith('video/') ? 50 * 1024 * 1024 : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
+      if (file.size > maxSize) {
+        const maxSizeMB = maxSize / (1024 * 1024);
+        return res.status(400).json({ error: `File size must be less than ${maxSizeMB}MB` });
       }
       
       const chatId = [senderId, recipientId].sort().join("_");
@@ -338,22 +362,35 @@ const sendDirectMessage = async (req, res) => {
     }
     
     // For regular messages (not uploadOnly), validate required fields
-    if (!recipientId || !content) {
+    if (!recipientId) {
       return res
         .status(400)
-        .json({ error: "Recipient ID and content are required" });
+        .json({ error: "Recipient ID is required" });
+    }
+    if (!content && !req.file) {
+      return res
+        .status(400)
+        .json({ error: "Content or attachment is required" });
     }
     let attachmentUrl = "";
     if (req.file) {
       const file = req.file;
-      if (!file.mimetype.startsWith("image/")) {
-        return res.status(400).json({ error: "Attachment must be an image" });
+      
+      // Allow images, videos, and documents (same as uploadOnly section)
+      const allowedTypes = ['image/', 'video/', 'application/pdf', 'text/', 'application/'];
+      const isAllowedType = allowedTypes.some(type => file.mimetype.startsWith(type));
+      
+      if (!isAllowedType) {
+        return res.status(400).json({ error: "Unsupported file type. Please upload images, videos, PDFs, or text files." });
       }
-      if (file.size > 5 * 1024 * 1024) {
-        return res
-          .status(400)
-          .json({ error: "Attachment size must be less than 5MB" });
+      
+      // Increase size limit for videos and documents
+      const maxSize = file.mimetype.startsWith('video/') ? 50 * 1024 * 1024 : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
+      if (file.size > maxSize) {
+        const maxSizeMB = maxSize / (1024 * 1024);
+        return res.status(400).json({ error: `File size must be less than ${maxSizeMB}MB` });
       }
+      
       const chatId = [senderId, recipientId].sort().join("_");
       const fileName = `directMessages/${chatId}/${Date.now()}-${
         file.originalname

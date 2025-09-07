@@ -7,7 +7,10 @@ const cacheService = require('./cache');
 class MonitoringService {
   constructor() {
     this.initializePrometheus();
-    this.initializeSentry();
+    // Initialize Sentry only if DSN is provided
+    if (process.env.SENTRY_DSN) {
+      this.initializeSentry();
+    }
     this.initializeCustomMetrics();
   }
 
@@ -141,15 +144,24 @@ class MonitoringService {
   // Initialize Sentry for error tracking
   initializeSentry() {
     if (process.env.SENTRY_DSN) {
-      Sentry.init({
-        dsn: process.env.SENTRY_DSN,
-        environment: process.env.NODE_ENV || 'development',
-        tracesSampleRate: 0.1,
-        integrations: [
-          new Sentry.Integrations.Http({ tracing: true }),
-          new Sentry.Integrations.Express({ app: require('express')() }),
-        ],
-      });
+      try {
+        Sentry.init({
+          dsn: process.env.SENTRY_DSN,
+          environment: process.env.NODE_ENV || 'development',
+          tracesSampleRate: 0.1,
+          // Simplified integration setup for newer Sentry versions
+          integrations: [
+            // Http integration is now included by default in newer versions
+            // Express integration is also included by default
+          ],
+        });
+        console.log('✅ Sentry initialized successfully');
+      } catch (error) {
+        console.warn('⚠️ Sentry initialization failed:', error.message);
+        // Continue without Sentry if initialization fails
+      }
+    } else {
+      console.log('ℹ️ Sentry DSN not provided, skipping Sentry initialization');
     }
   }
 

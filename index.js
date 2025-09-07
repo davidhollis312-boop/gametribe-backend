@@ -83,6 +83,60 @@ app.use("/api/search", searchRouter);
 // Add auth route for cross-platform authentication
 app.use("/api/auth", require("./routes/auth"));
 
+// Open Graph unfurl endpoint using proper scraper
+app.get("/api/og", async (req, res) => {
+  try {
+    let targetUrl = req.query.url;
+    if (!targetUrl) {
+      return res.status(400).json({ error: "Missing url parameter" });
+    }
+
+    // Clean and validate URL
+    targetUrl = decodeURIComponent(targetUrl);
+    
+    // Remove any HTML tags that might have been included
+    targetUrl = targetUrl.replace(/<[^>]*>/g, '').trim();
+    
+    // Validate URL format
+    if (!/^https?:\/\//i.test(targetUrl)) {
+      return res.status(400).json({ error: "Invalid URL format" });
+    }
+
+    // Additional validation using URL constructor
+    try {
+      new URL(targetUrl);
+    } catch (urlError) {
+      return res.status(400).json({ error: "Invalid URL", details: urlError.message });
+    }
+    
+    const ogScraper = require('./utils/ogScraper');
+    const data = await ogScraper.scrape(targetUrl);
+    res.json(data);
+  } catch (e) {
+    console.error("/api/og error", e.message);
+    
+    // Handle specific error types more gracefully
+    if (e.message.includes('503') || e.message.includes('Service Unavailable')) {
+      res.status(503).json({ 
+        error: "Website temporarily unavailable", 
+        details: "The target website is currently unavailable. Please try again later." 
+      });
+    } else if (e.message.includes('404') || e.message.includes('Not Found')) {
+      res.status(404).json({ 
+        error: "Page not found", 
+        details: "The requested page could not be found." 
+      });
+    } else if (e.message.includes('403') || e.message.includes('Forbidden')) {
+      res.status(403).json({ 
+        error: "Access denied", 
+        details: "Access to this website is forbidden." 
+      });
+    } else {
+      res.status(500).json({ error: "Failed to unfurl url", details: e.message });
+    }
+  }
+});
+
 app.get("/api/test", (req, res) => {
   res.json({ message: "API is working" });
 });

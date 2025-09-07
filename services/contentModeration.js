@@ -164,23 +164,35 @@ class ContentModerationService {
   detectSpam(content) {
     const lowerContent = content.toLowerCase();
     
+    console.log('🔍 SPAM DETECTION DEBUG:', {
+      content: content,
+      lowerContent: lowerContent,
+      contentLength: content.length
+    });
+    
     // Check spam patterns
     for (const pattern of this.spamPatterns) {
       if (pattern.test(content)) {
+        console.log('❌ SPAM PATTERN MATCHED:', {
+          pattern: pattern.toString(),
+          content: content
+        });
         return { isSpam: true, pattern: pattern.toString() };
       }
     }
 
-    // Check for excessive repetition
-    const words = lowerContent.split(/\s+/);
-    const wordCounts = {};
-    words.forEach(word => {
-      wordCounts[word] = (wordCounts[word] || 0) + 1;
-    });
+    // Check for excessive repetition (only for longer content)
+    if (content.length > 50) {
+      const words = lowerContent.split(/\s+/);
+      const wordCounts = {};
+      words.forEach(word => {
+        wordCounts[word] = (wordCounts[word] || 0) + 1;
+      });
 
-    const maxRepetition = Math.max(...Object.values(wordCounts));
-    if (maxRepetition > words.length * 0.3) {
-      return { isSpam: true, reason: 'excessive_word_repetition' };
+      const maxRepetition = Math.max(...Object.values(wordCounts));
+      if (maxRepetition > words.length * 0.3) {
+        return { isSpam: true, reason: 'excessive_word_repetition' };
+      }
     }
 
     // Check for URL spam
@@ -196,8 +208,17 @@ class ContentModerationService {
   detectInappropriateContent(content) {
     const lowerContent = content.toLowerCase();
     
+    console.log('🔍 INAPPROPRIATE CONTENT DEBUG:', {
+      content: content,
+      lowerContent: lowerContent
+    });
+    
     for (const word of this.inappropriateWords) {
       if (lowerContent.includes(word.toLowerCase())) {
+        console.log('❌ INAPPROPRIATE WORD MATCHED:', {
+          word: word,
+          content: content
+        });
         return { 
           isInappropriate: true, 
           flaggedWord: word,
@@ -278,8 +299,8 @@ class ContentModerationService {
 
     switch (contentType) {
       case 'post':
-        // Posts should have meaningful content
-        if (content.length < 10) {
+        // Posts should have meaningful content (but allow short posts with media)
+        if (content.length < 5) {
           flags.push('minimal_post_content');
           reasons.push('Post content is too short');
         }

@@ -165,35 +165,82 @@ const createPost = async (req, res) => {
     const userId = req.user.uid;
     const { content, category, imageLink } = req.body;
     
+    console.log('🔍 CREATE POST DEBUG - Request received:', {
+      userId,
+      hasContent: !!content,
+      contentType: typeof content,
+      contentLength: content ? content.length : 0,
+      contentPreview: content ? content.substring(0, 100) + '...' : 'null',
+      category,
+      imageLink,
+      hasFile: !!req.file,
+      fileInfo: req.file ? {
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      } : null,
+      bodyKeys: Object.keys(req.body),
+      allBodyData: req.body
+    });
+    
     // ✅ NEW: Enhanced input validation
     if (!content || typeof content !== "string" || content.trim().length === 0) {
+      console.log('❌ VALIDATION FAILED - Content validation:', {
+        hasContent: !!content,
+        contentType: typeof content,
+        contentLength: content ? content.length : 0,
+        contentTrimmed: content ? content.trim().length : 0
+      });
       return res.status(400).json({
         error: "Post content is required and must be a non-empty string",
       });
     }
     
     if (content.length > 2000) {
+      console.log('❌ VALIDATION FAILED - Content too long:', {
+        contentLength: content.length,
+        maxAllowed: 2000
+      });
       return res.status(400).json({
         error: "Post content cannot exceed 2000 characters",
       });
     }
     
     if (category && (typeof category !== "string" || category.length > 50)) {
+      console.log('❌ VALIDATION FAILED - Category validation:', {
+        category,
+        categoryType: typeof category,
+        categoryLength: category ? category.length : 0,
+        maxAllowed: 50
+      });
       return res.status(400).json({
         error: "Category must be a string with maximum 50 characters",
       });
     }
     
     if (imageLink && (typeof imageLink !== "string" || !isValidUrl(imageLink))) {
+      console.log('❌ VALIDATION FAILED - Image link validation:', {
+        imageLink,
+        imageLinkType: typeof imageLink,
+        isValidUrl: imageLink ? isValidUrl(imageLink) : false
+      });
       return res.status(400).json({
         error: "Image link must be a valid URL",
       });
     }
     
     // ✅ NEW: Advanced content moderation
+    console.log('🔍 Running content moderation check...');
     const moderationResult = await contentModerationService.moderateContent(content, 'post', userId);
+    console.log('🔍 Content moderation result:', moderationResult);
     
     if (!moderationResult.isApproved) {
+      console.log('❌ VALIDATION FAILED - Content moderation:', {
+        isApproved: moderationResult.isApproved,
+        reasons: moderationResult.reasons,
+        flags: moderationResult.flags,
+        severity: moderationResult.severity
+      });
       monitoringService.trackContentFlagged('inappropriate', moderationResult.severity);
       return res.status(400).json({
         error: "Post content violates community guidelines",
@@ -204,17 +251,34 @@ const createPost = async (req, res) => {
     
     monitoringService.trackContentModerated('post', 'approved');
     const sanitizedContent = sanitizeInput(content);
+    console.log('🔍 Content sanitized:', {
+      originalLength: content.length,
+      sanitizedLength: sanitizedContent.length,
+      sanitizedPreview: sanitizedContent.substring(0, 100) + '...'
+    });
+    
     const userRef = database.ref(`users/${userId}`);
     const userSnapshot = await userRef.once("value");
     if (!userSnapshot.exists()) {
+      console.log('❌ VALIDATION FAILED - User not found:', userId);
       return res.status(404).json({ error: "User not found" });
     }
     const userData = userSnapshot.val();
     
     // Validate user data structure
     if (!userData) {
+      console.log('❌ VALIDATION FAILED - User data not found:', userId);
       return res.status(404).json({ error: "User data not found" });
     }
+    
+    console.log('🔍 User data retrieved:', {
+      userId,
+      hasUsername: !!userData.username,
+      username: userData.username,
+      hasEmail: !!userData.email,
+      email: userData.email,
+      hasAvatar: !!userData.avatar
+    });
     
     // Ensure user has proper username - prioritize Google displayName
     if (!userData.username || userData.username === "User" || userData.username.trim() === "") {
@@ -245,9 +309,23 @@ const createPost = async (req, res) => {
     let mediaType = "image"; // Default to image
     let duration = null; // For videos
     
+    console.log('🔍 Processing media:', {
+      hasFile: !!req.file,
+      hasImageLink: !!imageLink,
+      imageLink: imageLink
+    });
+    
     if (req.file) {
       const file = req.file;
+      console.log('🔍 File processing:', {
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+        fieldname: file.fieldname
+      });
+      
       if (!file.mimetype.startsWith("image/") && !file.mimetype.startsWith("video/")) {
+        console.log('❌ VALIDATION FAILED - Invalid file type:', file.mimetype);
         return res.status(400).json({ error: "Only image and video files are allowed" });
       }
       
@@ -258,11 +336,11 @@ const createPost = async (req, res) => {
         // Check if duration is provided in the request
         if (req.body.duration) {
           const videoDuration = parseFloat(req.body.duration);
-          const maxDuration = 20 * 60; // 20 minutes in seconds
+          const maxDuration = 60; // 1 minute in seconds
           
           if (videoDuration > maxDuration) {
             return res.status(400).json({ 
-              error: `Video duration must be less than 20 minutes. Current duration: ${Math.round(videoDuration / 60)} minutes.` 
+              error: `Video duration must be 1 minute or less. Current duration: ${Math.round(videoDuration)} seconds.` 
             });
           }
           duration = videoDuration;
@@ -308,7 +386,20 @@ const createPost = async (req, res) => {
       repostChain: [],
       originalAuthor: null,
     };
+    
+    console.log('🔍 Creating post with data:', {
+      postId,
+      authorId: newPost.authorId,
+      author: newPost.author,
+      contentLength: newPost.content.length,
+      category: newPost.category,
+      hasImage: !!newPost.image,
+      mediaType: newPost.mediaType,
+      duration: newPost.duration
+    });
+    
     await database.ref(`posts/${postId}`).set(newPost);
+    console.log('✅ Post created successfully:', postId);
     
     // ✅ NEW: Invalidate cache
     await cacheService.invalidatePosts();
@@ -330,9 +421,15 @@ const createPost = async (req, res) => {
       // Don't fail the post creation if points fail
     }
     
+    console.log('🎉 Post creation completed successfully');
     return res.status(201).json({ id: postId, ...newPost });
   } catch (error) {
-    console.error("Error creating post:", error.message, error.stack);
+    console.error("❌ ERROR creating post:", {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      code: error.code
+    });
     return res.status(500).json({ error: "Failed to create post" });
   }
 };
@@ -1111,15 +1208,15 @@ const updatePost = async (req, res) => {
         return res.status(400).json({ error: "Only image and video files are allowed" });
       }
       
-      // For videos, validate duration (20 minutes max)
+      // For videos, validate duration (1 minute max)
       if (file.mimetype.startsWith("video/")) {
         if (req.body.duration) {
           const videoDuration = parseFloat(req.body.duration);
-          const maxDuration = 20 * 60; // 20 minutes in seconds
+          const maxDuration = 60; // 1 minute in seconds
           
           if (videoDuration > maxDuration) {
             return res.status(400).json({ 
-              error: `Video duration must be less than 20 minutes. Current duration: ${Math.round(videoDuration / 60)} minutes.` 
+              error: `Video duration must be 1 minute or less. Current duration: ${Math.round(videoDuration)} seconds.` 
             });
           }
         }

@@ -6,20 +6,23 @@ try {
   const app = admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
     databaseURL: "https://gametibe2025-default-rtdb.firebaseio.com",
-    storageBucket: "gametibe2025.appspot.com",
+    storageBucket: "gametibe2025.firebasestorage.app",
   });
 
   const auth = admin.auth();
-  const database = admin.database(); // Realtime Da.tabase
+  const database = admin.database(); // Realtime Database
   
   // Initialize storage with error handling
-  const storage = initializeStorage();
+  const storageBucket = initializeStorage();
   
-  // Add utility methods to storage object
-  storage.uploadFile = (file, destination) => storageUtils.uploadFile(storage, file, destination);
-  storage.deleteFile = (fileName) => storageUtils.deleteFile(storage, fileName);
-  storage.getSignedUrl = (fileName, options) => storageUtils.getSignedUrl(storage, fileName, options);
-  storage.isAvailable = () => storageUtils.isStorageAvailable(storage);
+  // Create storage object with bucket method
+  const storage = {
+    bucket: () => storageBucket,
+    uploadFile: (file, destination) => storageUtils.uploadFile(storageBucket, file, destination),
+    deleteFile: (fileName) => storageUtils.deleteFile(storageBucket, fileName),
+    getSignedUrl: (fileName, options) => storageUtils.getSignedUrl(storageBucket, fileName, options),
+    isAvailable: () => storageUtils.isStorageAvailable(storageBucket)
+  };
 
   console.log("✅ Firebase Admin SDK initialized successfully");
   console.log(`📊 Database URL: https://gametibe2025-default-rtdb.firebaseio.com`);
@@ -37,6 +40,7 @@ try {
   const auth = admin.auth();
   const database = admin.database();
   const storage = {
+    bucket: () => { throw new Error('Firebase not initialized'); },
     uploadFile: () => Promise.reject(new Error('Firebase not initialized')),
     deleteFile: () => Promise.resolve(),
     getSignedUrl: () => Promise.reject(new Error('Firebase not initialized')),
