@@ -292,6 +292,235 @@ const updateUserCountry = async (req, res) => {
   }
 };
 
+// Friend Request System
+const sendFriendRequest = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user.uid;
+    
+    if (currentUserId === userId) {
+      return res.status(400).json({ error: "Cannot send friend request to yourself" });
+    }
+
+    // Check if target user exists
+    const userRef = database.ref(`users/${userId}`);
+    const userSnapshot = await userRef.once("value");
+    if (!userSnapshot.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userData = userSnapshot.val();
+    const currentUserRef = database.ref(`users/${currentUserId}`);
+    const currentUserSnapshot = await currentUserRef.once("value");
+    const currentUserData = currentUserSnapshot.val();
+
+    // Check if already friends
+    const isAlreadyFriend = (currentUserData.friends || []).some((friend) => friend.uid === userId);
+    if (isAlreadyFriend) {
+      return res.status(400).json({ error: "Already friends with this user" });
+    }
+
+    // Check if friend request already exists
+    const friendRequestsRef = database.ref(`friendRequests/${userId}/received`);
+    const existingRequestSnapshot = await friendRequestsRef.child(currentUserId).once("value");
+    if (existingRequestSnapshot.exists()) {
+      return res.status(400).json({ error: "Friend request already sent" });
+    }
+
+    // Check if there's a pending request from the target user
+    const pendingRequestRef = database.ref(`friendRequests/${currentUserId}/received`);
+    const pendingRequestSnapshot = await pendingRequestRef.child(userId).once("value");
+    if (pendingRequestSnapshot.exists()) {
+      return res.status(400).json({ error: "This user has already sent you a friend request" });
+    }
+
+    // Create friend request
+    const friendRequest = {
+      fromUserId: currentUserId,
+      fromUsername: currentUserData.username || currentUserData.email?.split("@")[0] || "Unknown",
+      fromAvatar: currentUserData.avatar || "",
+      toUserId: userId,
+      toUsername: userData.username || userData.email?.split("@")[0] || "Unknown",
+      toAvatar: userData.avatar || "",
+      status: "pending",
+      createdAt: new Date().toISOString(),
+    };
+
+    // Save to both users' friend request collections
+    await friendRequestsRef.child(currentUserId).set(friendRequest);
+    await database.ref(`friendRequests/${currentUserId}/sent`).child(userId).set(friendRequest);
+
+    return res.status(200).json({ 
+      message: "Friend request sent successfully",
+      requestId: `${currentUserId}_${userId}`
+    });
+  } catch (error) {
+    console.error("Error sending friend request:", error);
+    return res.status(500).json({ error: "Failed to send friend request" });
+  }
+};
+
+const acceptFriendRequest = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user.uid;
+
+    if (currentUserId === userId) {
+      return res.status(400).json({ error: "Cannot accept friend request from yourself" });
+    }
+
+    // Check if friend request exists
+    const friendRequestRef = database.ref(`friendRequests/${currentUserId}/received/${userId}`);
+    const requestSnapshot = await friendRequestRef.once("value");
+    
+    if (!requestSnapshot.exists()) {
+      return res.status(404).json({ error: "Friend request not found" });
+    }
+
+    const requestData = requestSnapshot.val();
+    if (requestData.status !== "pending") {
+      return res.status(400).json({ error: "Friend request is no longer pending" });
+    }
+
+    // Get both users' data
+    const currentUserRef = database.ref(`users/${currentUserId}`);
+    const targetUserRef = database.ref(`users/${userId}`);
+    
+    const [currentUserSnapshot, targetUserSnapshot] = await Promise.all([
+      currentUserRef.once("value"),
+      targetUserRef.once("value")
+    ]);
+
+    const currentUserData = currentUserSnapshot.val();
+    const targetUserData = targetUserSnapshot.val();
+
+    // Add each other as friends
+    const newFriendForCurrentUser = {
+      uid: userId,
+      username: targetUserData.username || targetUserData.email?.split("@")[0] || "Unknown",
+      avatar: targetUserData.avatar || "",
+      followedAt: new Date().toISOString(),
+    };
+
+    const newFriendForTargetUser = {
+      uid: currentUserId,
+      username: currentUserData.username || currentUserData.email?.split("@")[0] || "Unknown",
+      avatar: currentUserData.avatar || "",
+      followedAt: new Date().toISOString(),
+    };
+
+    // Update both users' friends lists
+    await Promise.all([
+      currentUserRef.update({
+        friends: [...(currentUserData.friends || []), newFriendForCurrentUser],
+        friendsCount: (currentUserData.friendsCount || 0) + 1,
+      }),
+      targetUserRef.update({
+        friends: [...(targetUserData.friends || []), newFriendForTargetUser],
+        friendsCount: (targetUserData.friendsCount || 0) + 1,
+      })
+    ]);
+
+    // Remove the friend request
+    await Promise.all([
+      friendRequestRef.remove(),
+      database.ref(`friendRequests/${userId}/sent/${currentUserId}`).remove()
+    ]);
+
+    return res.status(200).json({ 
+      message: "Friend request accepted successfully",
+      friend: newFriendForCurrentUser
+    });
+  } catch (error) {
+    console.error("Error accepting friend request:", error);
+    return res.status(500).json({ error: "Failed to accept friend request" });
+  }
+};
+
+const rejectFriendRequest = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user.uid;
+
+    if (currentUserId === userId) {
+      return res.status(400).json({ error: "Cannot reject friend request from yourself" });
+    }
+
+    // Check if friend request exists
+    const friendRequestRef = database.ref(`friendRequests/${currentUserId}/received/${userId}`);
+    const requestSnapshot = await friendRequestRef.once("value");
+    
+    if (!requestSnapshot.exists()) {
+      return res.status(404).json({ error: "Friend request not found" });
+    }
+
+    // Remove the friend request
+    await Promise.all([
+      friendRequestRef.remove(),
+      database.ref(`friendRequests/${userId}/sent/${currentUserId}`).remove()
+    ]);
+
+    return res.status(200).json({ message: "Friend request rejected successfully" });
+  } catch (error) {
+    console.error("Error rejecting friend request:", error);
+    return res.status(500).json({ error: "Failed to reject friend request" });
+  }
+};
+
+const getFriendRequests = async (req, res) => {
+  try {
+    const currentUserId = req.user.uid;
+    const { type = "received" } = req.query; // "received" or "sent"
+
+    const friendRequestsRef = database.ref(`friendRequests/${currentUserId}/${type}`);
+    const requestsSnapshot = await friendRequestsRef.once("value");
+    
+    const requests = requestsSnapshot.val() || {};
+    const requestsList = Object.entries(requests).map(([userId, request]) => ({
+      id: `${request.fromUserId}_${request.toUserId}`,
+      ...request
+    }));
+
+    return res.status(200).json({ 
+      requests: requestsList,
+      count: requestsList.length
+    });
+  } catch (error) {
+    console.error("Error fetching friend requests:", error);
+    return res.status(500).json({ error: "Failed to fetch friend requests" });
+  }
+};
+
+const cancelFriendRequest = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user.uid;
+
+    if (currentUserId === userId) {
+      return res.status(400).json({ error: "Cannot cancel friend request to yourself" });
+    }
+
+    // Check if friend request exists
+    const friendRequestRef = database.ref(`friendRequests/${userId}/received/${currentUserId}`);
+    const requestSnapshot = await friendRequestRef.once("value");
+    
+    if (!requestSnapshot.exists()) {
+      return res.status(404).json({ error: "Friend request not found" });
+    }
+
+    // Remove the friend request
+    await Promise.all([
+      friendRequestRef.remove(),
+      database.ref(`friendRequests/${currentUserId}/sent/${userId}`).remove()
+    ]);
+
+    return res.status(200).json({ message: "Friend request cancelled successfully" });
+  } catch (error) {
+    console.error("Error cancelling friend request:", error);
+    return res.status(500).json({ error: "Failed to cancel friend request" });
+  }
+};
+
 module.exports = {
   getUserProfile,
   updateUserProfile,
@@ -304,4 +533,10 @@ module.exports = {
   updateUserStatus,
   syncPresence,
   updateUserCountry,
+  // Friend Request System
+  sendFriendRequest,
+  acceptFriendRequest,
+  rejectFriendRequest,
+  getFriendRequests,
+  cancelFriendRequest,
 };

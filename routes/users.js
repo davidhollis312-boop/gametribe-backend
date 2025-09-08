@@ -12,6 +12,12 @@ const {
   updateUserStatus,
   syncPresence,
   updateUserCountry,
+  // Friend Request System
+  sendFriendRequest,
+  acceptFriendRequest,
+  rejectFriendRequest,
+  getFriendRequests,
+  cancelFriendRequest,
 } = require("../controllers/users");
 const authenticate = require("../middleware/auth");
 const { verifyToken } = require("../middleware/authMiddleware");
@@ -28,6 +34,13 @@ router.get("/:userId", authenticate, getUserById);
 router.post("/update-status", authenticate, updateUserStatus);
 router.post("/sync-presence", authenticate, syncPresence);
 router.put("/country", authenticate, updateUserCountry);
+
+// Friend Request System Routes
+router.post("/:userId/send-friend-request", authenticate, sendFriendRequest);
+router.post("/:userId/accept-friend-request", authenticate, acceptFriendRequest);
+router.post("/:userId/reject-friend-request", authenticate, rejectFriendRequest);
+router.post("/:userId/cancel-friend-request", authenticate, cancelFriendRequest);
+router.get("/friend-requests", authenticate, getFriendRequests);
 
 // GET endpoint for token verification (for cross-platform auth)
 router.get('/verify', verifyToken, (req, res) => {
