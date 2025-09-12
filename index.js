@@ -18,6 +18,30 @@ const analyticsRouter = require("./routes/analytics");
 const searchRouter = require("./routes/search");
 
 const app = express();
+
+// Rate limiting for Nominatim API calls
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const MAX_REQUESTS_PER_WINDOW = 10; // Max 10 requests per minute per IP
+
+const checkRateLimit = (ip) => {
+  const now = Date.now();
+  const userRequests = rateLimitMap.get(ip) || [];
+  
+  // Remove old requests outside the window
+  const recentRequests = userRequests.filter(time => now - time < RATE_LIMIT_WINDOW);
+  
+  if (recentRequests.length >= MAX_REQUESTS_PER_WINDOW) {
+    return false; // Rate limit exceeded
+  }
+  
+  // Add current request
+  recentRequests.push(now);
+  rateLimitMap.set(ip, recentRequests);
+  
+  return true; // Request allowed
+};
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -141,13 +165,22 @@ app.get("/api/og", async (req, res) => {
 app.get("/api/places/search", async (req, res) => {
   try {
     const { query, lat, lng } = req.query;
+    const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+
+    // Check rate limit
+    if (!checkRateLimit(clientIP)) {
+      return res.status(429).json({
+        error: "Rate limit exceeded",
+        message: "Too many requests. Please wait a moment before searching again."
+      });
+    }
     
     if (!query || query.length < 3) {
       console.log('Query validation failed:', { query, length: query?.length });
       return res.status(400).json({ error: "Query must be at least 3 characters long" });
     }
 
-    console.log('Places search request:', { query, lat, lng, queryLength: query.length });
+    console.log('Places search request:', { query, lat, lng, queryLength: query.length, clientIP });
 
     // Build Nominatim API URL with optional location bias
     let apiUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&addressdetails=1&extratags=1`;
@@ -168,13 +201,42 @@ app.get("/api/places/search", async (req, res) => {
     // Debug: Log the API URL being called
     console.log('Nominatim API URL:', apiUrl);
 
+    // Add a small delay to be respectful to Nominatim API
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
     // Use OpenStreetMap Nominatim API (completely free, no billing required)
-    const response = await fetch(apiUrl);
+    // Add proper headers to comply with Nominatim usage policy
+    const response = await fetch(apiUrl, {
+      headers: {
+        'User-Agent': 'GameTribe-Community/1.0 (https://gametribe-backend.onrender.com)',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9'
+      }
+    });
 
     if (!response.ok) {
       console.error('Nominatim API error:', response.status, response.statusText);
       const errorText = await response.text();
       console.error('Nominatim API error response:', errorText);
+      
+      // If we get a 403 (blocked), provide a fallback response
+      if (response.status === 403) {
+        console.log('Nominatim API blocked, providing fallback suggestions');
+        return res.json({
+          suggestions: [
+            {
+              id: 'fallback-1',
+              name: query,
+              address: `${query}, Kenya`,
+              location: {
+                lat: lat ? parseFloat(lat) : -1.1544312,
+                lng: lng ? parseFloat(lng) : 36.9650841
+              }
+            }
+          ]
+        });
+      }
+      
       throw new Error(`Nominatim API error: ${response.status} - ${errorText}`);
     }
 
