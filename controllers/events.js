@@ -93,6 +93,8 @@ const createEvent = async (req, res, next) => {
     const newEventRef = eventsRef.push();
     await newEventRef.set(eventData);
 
+    console.log(`✅ Event created successfully - ID: ${newEventRef.key}, Title: "${eventData.title}", Start: ${eventData.startDate}`);
+    
     res.status(201).json({ id: newEventRef.key, ...eventData });
   } catch (error) {
     console.error("Error in createEvent:", error.message, error.stack);
@@ -118,12 +120,21 @@ const getEvents = async (req, res, next) => {
       bookingCount: event.bookings ? Object.keys(event.bookings).length : 0,
     }));
 
-    // Filter for upcoming events only
+    // Filter for upcoming events only (with 1 hour buffer to account for timezone issues)
     const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000); // 1 hour ago
+    
+    console.log(`🕐 Date filtering - Now: ${now.toISOString()}, One hour ago: ${oneHourAgo.toISOString()}`);
+    console.log(`📊 Total events before filtering: ${eventsArray.length}`);
+    
     eventsArray = eventsArray.filter(event => {
       const eventStartDate = new Date(event.startDate);
-      return eventStartDate >= now;
+      const isUpcoming = eventStartDate >= oneHourAgo;
+      console.log(`📅 Event "${event.title}" - Start: ${event.startDate}, Parsed: ${eventStartDate.toISOString()}, Upcoming: ${isUpcoming}`);
+      return isUpcoming;
     });
+    
+    console.log(`📊 Total events after filtering: ${eventsArray.length}`);
 
     // Apply search filter
     if (search) {
