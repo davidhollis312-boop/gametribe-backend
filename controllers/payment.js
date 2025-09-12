@@ -12,8 +12,18 @@ const Stripe = require("stripe");
 const axios = require("axios");
 require("dotenv").config();
 
-// Initialize Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+// Initialize Stripe (guarded for missing key in local/dev)
+let stripe = null;
+try {
+  if (process.env.STRIPE_SECRET_KEY && process.env.STRIPE_SECRET_KEY !== 'undefined') {
+    stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  } else {
+    console.warn("[Payments] STRIPE_SECRET_KEY not set; Stripe features disabled in this environment.");
+  }
+} catch (e) {
+  console.error("[Payments] Failed to initialize Stripe:", e.message);
+  stripe = null;
+}
 
 // M-Pesa credentials
 const MPESA_CONSUMER_KEY = process.env.MPESA_CONSUMER_KEY;
@@ -97,6 +107,9 @@ const getMpesaToken = async () => {
 // Create Stripe payment intent
 const createStripePayment = async (req, res) => {
   try {
+    if (!stripe) {
+      return res.status(503).json({ error: "Stripe not configured" });
+    }
     const { amount, userId, currency = "kes" } = req.body;
     if (
       !amount ||
@@ -253,7 +266,7 @@ const createMpesaPayment = async (req, res) => {
 const stripeWebhook = async (req, res) => {
   
 
-  if (!webhookSecret) {
+  if (!stripe || !webhookSecret) {
     console.error("Stripe webhook secret is not defined");
     await updateWithRetry(ref(database, `webhook_errors/stripe_${uuidv4()}`), {
       error: "Webhook secret not defined",

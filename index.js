@@ -137,6 +137,115 @@ app.get("/api/og", async (req, res) => {
   }
 });
 
+// OpenStreetMap Nominatim API endpoint (Free alternative to Google Places)
+app.get("/api/places/search", async (req, res) => {
+  try {
+    const { query, lat, lng } = req.query;
+    
+    if (!query || query.length < 3) {
+      console.log('Query validation failed:', { query, length: query?.length });
+      return res.status(400).json({ error: "Query must be at least 3 characters long" });
+    }
+
+    console.log('Places search request:', { query, lat, lng, queryLength: query.length });
+
+    // Build Nominatim API URL with optional location bias
+    let apiUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&addressdetails=1&extratags=1`;
+    
+    // Add location bias if coordinates are provided (prioritize nearby results)
+    if (lat && lng) {
+      // Use viewbox for location bias but don't restrict results to only within the box
+      const latOffset = 0.5; // ~55km radius
+      const lngOffset = 0.5; // ~55km radius
+      const minLon = parseFloat(lng) - lngOffset;
+      const minLat = parseFloat(lat) - latOffset;
+      const maxLon = parseFloat(lng) + lngOffset;
+      const maxLat = parseFloat(lat) + latOffset;
+      const viewbox = `${minLon},${minLat},${maxLon},${maxLat}`;
+      apiUrl += `&viewbox=${viewbox}`; // No bounded=1 to allow results outside the box
+    }
+
+    // Debug: Log the API URL being called
+    console.log('Nominatim API URL:', apiUrl);
+
+    // Use OpenStreetMap Nominatim API (completely free, no billing required)
+    const response = await fetch(apiUrl);
+
+    if (!response.ok) {
+      console.error('Nominatim API error:', response.status, response.statusText);
+      const errorText = await response.text();
+      console.error('Nominatim API error response:', errorText);
+      throw new Error(`Nominatim API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+
+    if (data && data.length > 0) {
+      let suggestions = data.map(place => ({
+        id: place.place_id || place.osm_id,
+        name: place.display_name.split(',')[0] || place.name || 'Unknown',
+        address: place.display_name,
+        location: {
+          lat: parseFloat(place.lat),
+          lng: parseFloat(place.lon)
+        }
+      }));
+
+      // Sort by distance if user location is provided
+      if (lat && lng) {
+        const userLat = parseFloat(lat);
+        const userLng = parseFloat(lng);
+        
+        // Calculate distance using Haversine formula
+        const calculateDistance = (lat1, lon1, lat2, lon2) => {
+          const R = 6371; // Earth's radius in kilometers
+          const dLat = (lat2 - lat1) * Math.PI / 180;
+          const dLon = (lon2 - lon1) * Math.PI / 180;
+          const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                    Math.sin(dLon/2) * Math.sin(dLon/2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+          return R * c; // Distance in kilometers
+        };
+
+        // Add distance to each suggestion and sort by distance
+        suggestions = suggestions.map(suggestion => ({
+          ...suggestion,
+          distance: calculateDistance(
+            userLat, 
+            userLng, 
+            suggestion.location.lat, 
+            suggestion.location.lng
+          )
+        })).sort((a, b) => a.distance - b.distance);
+
+        // Debug: Log sorted suggestions with distances
+        console.log('Sorted suggestions by distance:', suggestions.map(s => ({
+          name: s.name,
+          address: s.address,
+          distance: `${s.distance.toFixed(2)}km`
+        })));
+
+        // Remove distance from final response (keep it internal)
+        suggestions = suggestions.map(({ distance, ...suggestion }) => suggestion);
+      }
+
+      res.json({ suggestions });
+    } else {
+      res.status(400).json({
+        error: "No results found",
+        message: "No places found for the given query"
+      });
+    }
+  } catch (error) {
+    console.error("Nominatim API error:", error);
+    res.status(500).json({ 
+      error: "Failed to search places", 
+      details: error.message 
+    });
+  }
+});
+
 app.get("/api/test", (req, res) => {
   res.json({ message: "API is working" });
 });

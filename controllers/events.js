@@ -15,7 +15,7 @@ const sanitizeInput = (html) => {
 
 const createEvent = async (req, res, next) => {
   try {
-    const { title, description, startDate, endDate, imageUrl, category, maxAttendees } =
+    const { title, description, startDate, endDate, imageUrl, category, maxAttendees, meetingType, location, locationCoords, locationName, locationAddress, meetingLink } =
       req.body;
     const userId = req.user.uid;
 
@@ -42,6 +42,7 @@ const createEvent = async (req, res, next) => {
       image: imageUrl || null,
       category: category || null,
       maxAttendees: maxAttendees ? parseInt(maxAttendees) : null,
+      meetingType: meetingType || "physical",
       authorId: userId,
       author: userData.username || userData.email?.split("@")[0] || "Unknown User",
       authorImage: userData.avatar || "",
@@ -51,6 +52,26 @@ const createEvent = async (req, res, next) => {
       likes: 0,
       likedBy: [],
     };
+
+    // Add location data for physical events
+    if (meetingType === "physical" && location) {
+      eventData.location = location;
+      if (locationCoords) {
+        try {
+          eventData.locationCoords = JSON.parse(locationCoords);
+        } catch (e) {
+          console.error("Error parsing locationCoords:", e);
+        }
+      }
+      if (locationName) {
+        eventData.locationName = locationName;
+      }
+      if (locationAddress) {
+        eventData.locationAddress = locationAddress;
+      }
+    } else if (meetingType === "virtual" && meetingLink) {
+      eventData.meetingLink = meetingLink;
+    }
 
     if (req.file) {
       const fileName = `events/${Date.now()}_${req.file.originalname}`;
@@ -81,14 +102,89 @@ const createEvent = async (req, res, next) => {
 
 const getEvents = async (req, res, next) => {
   try {
+    const { page = 1, limit = 10, search = "", sortBy = "startDate", sortOrder = "asc" } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
+
+    console.log(`📄 Fetching events - Page: ${pageNum}, Limit: ${limitNum}, Search: "${search}", Sort: ${sortBy} ${sortOrder}`);
+
     const snapshot = await database.ref("events").once("value");
     const events = snapshot.val() || {};
-    const eventsArray = Object.entries(events).map(([id, event]) => ({
+    
+    let eventsArray = Object.entries(events).map(([id, event]) => ({
       id,
       ...event,
       bookingCount: event.bookings ? Object.keys(event.bookings).length : 0,
     }));
-    res.status(200).json(eventsArray);
+
+    // Filter for upcoming events only
+    const now = new Date();
+    eventsArray = eventsArray.filter(event => {
+      const eventStartDate = new Date(event.startDate);
+      return eventStartDate >= now;
+    });
+
+    // Apply search filter
+    if (search) {
+      eventsArray = eventsArray.filter(event => 
+        event.title.toLowerCase().includes(search.toLowerCase()) ||
+        event.description.toLowerCase().includes(search.toLowerCase()) ||
+        event.category.toLowerCase().includes(search.toLowerCase())
+      );
+    }
+
+    // Sort events
+    eventsArray.sort((a, b) => {
+      let aValue, bValue;
+      
+      switch (sortBy) {
+        case "startDate":
+          aValue = new Date(a.startDate);
+          bValue = new Date(b.startDate);
+          break;
+        case "createdAt":
+          aValue = new Date(a.createdAt);
+          bValue = new Date(b.createdAt);
+          break;
+        case "title":
+          aValue = a.title.toLowerCase();
+          bValue = b.title.toLowerCase();
+          break;
+        case "bookingCount":
+          aValue = a.bookingCount;
+          bValue = b.bookingCount;
+          break;
+        default:
+          aValue = new Date(a.startDate);
+          bValue = new Date(b.startDate);
+      }
+
+      if (sortOrder === "desc") {
+        return bValue > aValue ? 1 : bValue < aValue ? -1 : 0;
+      } else {
+        return aValue > bValue ? 1 : aValue < bValue ? -1 : 0;
+      }
+    });
+
+    // Apply pagination
+    const totalEvents = eventsArray.length;
+    const totalPages = Math.ceil(totalEvents / limitNum);
+    const paginatedEvents = eventsArray.slice(offset, offset + limitNum);
+
+    console.log(`✅ Events fetched - Total: ${totalEvents}, Page: ${pageNum}/${totalPages}, Returned: ${paginatedEvents.length}`);
+
+    res.status(200).json({
+      events: paginatedEvents,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalEvents,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1,
+        limit: limitNum
+      }
+    });
   } catch (error) {
     console.error("Error fetching events:", error.message, error.stack);
     res.status(500).json({ error: "Failed to fetch events" });
@@ -117,7 +213,7 @@ const getEventById = async (req, res, next) => {
 const updateEvent = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { title, description, startDate, endDate, imageUrl, category, maxAttendees } =
+    const { title, description, startDate, endDate, imageUrl, category, maxAttendees, meetingType, location, locationCoords, locationName, locationAddress, meetingLink } =
       req.body;
     const userId = req.user.uid;
 
@@ -188,6 +284,28 @@ const updateEvent = async (req, res, next) => {
     if (image !== undefined) updates.image = image;
     if (category !== undefined) updates.category = category;
     if (maxAttendees !== undefined) updates.maxAttendees = maxAttendees ? parseInt(maxAttendees) : null;
+    if (meetingType !== undefined) updates.meetingType = meetingType;
+    if (meetingType === "physical") {
+      if (location !== undefined) updates.location = location;
+      if (locationCoords) {
+        try {
+          updates.locationCoords = JSON.parse(locationCoords);
+        } catch (e) {
+          console.error("Error parsing locationCoords:", e);
+        }
+      }
+      if (locationName !== undefined) updates.locationName = locationName;
+      if (locationAddress !== undefined) updates.locationAddress = locationAddress;
+      // Clear virtual meeting fields when switching to physical
+      updates.meetingLink = null;
+    } else if (meetingType === "virtual") {
+      if (meetingLink !== undefined) updates.meetingLink = meetingLink;
+      // Clear physical location fields when switching to virtual
+      updates.location = null;
+      updates.locationCoords = null;
+      updates.locationName = null;
+      updates.locationAddress = null;
+    }
 
     await eventRef.set({ ...event, ...updates });
     res.status(200).json({ id, ...event, ...updates });
