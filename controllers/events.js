@@ -120,16 +120,15 @@ const getEvents = async (req, res, next) => {
       bookingCount: event.bookings ? Object.keys(event.bookings).length : 0,
     }));
 
-    // Filter for upcoming events only (with 1 hour buffer to account for timezone issues)
+    // Filter for upcoming events only (no buffer for testing)
     const now = new Date();
-    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000); // 1 hour ago
     
-    console.log(`🕐 Date filtering - Now: ${now.toISOString()}, One hour ago: ${oneHourAgo.toISOString()}`);
+    console.log(`🕐 Date filtering - Now: ${now.toISOString()}`);
     console.log(`📊 Total events before filtering: ${eventsArray.length}`);
     
     eventsArray = eventsArray.filter(event => {
       const eventStartDate = new Date(event.startDate);
-      const isUpcoming = eventStartDate >= oneHourAgo;
+      const isUpcoming = eventStartDate >= now;
       console.log(`📅 Event "${event.title}" - Start: ${event.startDate}, Parsed: ${eventStartDate.toISOString()}, Upcoming: ${isUpcoming}`);
       return isUpcoming;
     });
