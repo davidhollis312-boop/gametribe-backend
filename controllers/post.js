@@ -906,7 +906,9 @@ const repostPost = async (req, res) => {
       authorImage: userData.avatar || "",
       content: comment || "", // Optional comment
       category: originalPost.category || "",
-      image: "", // Reposts don't have their own media
+      image: originalPost.image || "", // Preserve original post's media
+      mediaType: originalPost.mediaType || "", // Preserve media type
+      duration: originalPost.duration || null, // Preserve duration for videos
       createdAt: new Date().toISOString(),
       comments: 0,
       likes: 0,
@@ -923,12 +925,24 @@ const repostPost = async (req, res) => {
         authorImage: originalPost.authorImage || "", // ✅ Include author image
         content: originalPost.content,
         image: originalPost.image || "",
+        mediaType: originalPost.mediaType || "", // Include media type
+        duration: originalPost.duration || null, // Include duration
         category: originalPost.category || "",
         createdAt: originalPost.createdAt,
       },
       repostChain: repostChain, // Always just the original post since no nested reposts
       originalAuthor: originalPost.author, // Always points to the original author
     };
+
+    console.log('🔍 Backend repost data being created:', {
+      repostId,
+      originalImage: originalPost.image,
+      originalMediaType: originalPost.mediaType,
+      repostImage: repostData.image,
+      repostMediaType: repostData.mediaType,
+      originalPostImage: repostData.originalPost.image,
+      originalPostMediaType: repostData.originalPost.mediaType
+    });
 
     console.log('💾 Repost data to save:', { 
       repostId, 
