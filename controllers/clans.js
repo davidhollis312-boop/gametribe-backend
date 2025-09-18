@@ -37,12 +37,12 @@ const createClan = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
     const userData = userSnapshot.val();
-    
+
     // Validate user data structure
     if (!userData) {
       return res.status(404).json({ error: "User data not found" });
     }
-    
+
     let logoUrl = "https://via.placeholder.com/40";
     if (req.file) {
       const file = req.file;
@@ -68,7 +68,9 @@ const createClan = async (req, res) => {
       slogan: slogan.trim(),
       logo: logoUrl,
       adminId: userId,
-      admin: userData.username || (userData.email ? userData.email.split("@")[0] : "Unknown User"),
+      admin:
+        userData.username ||
+        (userData.email ? userData.email.split("@")[0] : "Unknown User"),
       members: [{ userId, joinedAt: new Date().toISOString() }],
       maxMembers: 50,
       isFull: false,
@@ -129,6 +131,56 @@ const joinClan = async (req, res) => {
   }
 };
 
+const leaveClan = async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const clanId = req.params.id;
+
+    const clanRef = database.ref(`clans/${clanId}`);
+    const clanSnapshot = await clanRef.once("value");
+    if (!clanSnapshot.exists()) {
+      return res.status(404).json({ error: "Clan not found" });
+    }
+    const clan = clanSnapshot.val();
+
+    if (
+      !Array.isArray(clan.members) ||
+      !clan.members.some((m) => m.userId === userId)
+    ) {
+      return res
+        .status(400)
+        .json({ error: "You are not a member of this clan" });
+    }
+
+    if (clan.adminId === userId) {
+      return res
+        .status(403)
+        .json({ error: "Admin cannot leave their own clan" });
+    }
+
+    const updatedMembers = clan.members.filter((m) => m.userId !== userId);
+    await clanRef.update({
+      members: updatedMembers,
+      isFull: updatedMembers.length >= (clan.maxMembers || 50),
+    });
+
+    const userRef = database.ref(`users/${userId}`);
+    const userSnapshot = await userRef.once("value");
+    if (userSnapshot.exists()) {
+      const userData = userSnapshot.val();
+      const updatedClans = (userData.clans || []).filter(
+        (cId) => cId !== clanId
+      );
+      await userRef.update({ clans: updatedClans });
+    }
+
+    return res.status(200).json({ message: "Left clan successfully" });
+  } catch (error) {
+    console.error("Error leaving clan:", error);
+    return res.status(500).json({ error: "Failed to leave clan" });
+  }
+};
+
 const getClanMembers = async (req, res) => {
   try {
     const userId = req.user.uid;
@@ -153,16 +205,18 @@ const getClanMembers = async (req, res) => {
       const userSnapshot = await userRef.once("value");
       if (userSnapshot.exists()) {
         const userData = userSnapshot.val();
-        
+
         // Validate user data structure
         if (!userData) {
-          console.log('⚠️ User data is null for user:', member.userId);
+          console.log("⚠️ User data is null for user:", member.userId);
           continue;
         }
-        
+
         members.push({
           id: member.userId,
-          username: userData.username || (userData.email ? userData.email.split("@")[0] : "Unknown User"),
+          username:
+            userData.username ||
+            (userData.email ? userData.email.split("@")[0] : "Unknown User"),
           avatar: userData.avatar || "https://via.placeholder.com/40",
           joinedAt: member.joinedAt,
           points: userData.points || 0,
@@ -186,40 +240,61 @@ const sendGroupMessage = async (req, res) => {
     const clanId = req.params.id;
     const userId = req.user.uid;
     const { content, uploadOnly } = req.body;
-    
+
     // If uploadOnly flag is present, handle file upload only
-    if (uploadOnly === 'true') {
+    if (uploadOnly === "true") {
       if (!req.file) {
-        return res.status(400).json({ error: "File is required for upload only mode" });
+        return res
+          .status(400)
+          .json({ error: "File is required for upload only mode" });
       }
-      
+
       const file = req.file;
       // Allow images, videos, and documents
-      const allowedTypes = ['image/', 'video/', 'application/pdf', 'text/', 'application/'];
-      const isAllowedType = allowedTypes.some(type => file.mimetype.startsWith(type));
-      
+      const allowedTypes = [
+        "image/",
+        "video/",
+        "application/pdf",
+        "text/",
+        "application/",
+      ];
+      const isAllowedType = allowedTypes.some((type) =>
+        file.mimetype.startsWith(type)
+      );
+
       if (!isAllowedType) {
-        return res.status(400).json({ error: "Unsupported file type. Please upload images, videos, PDFs, or text files." });
+        return res
+          .status(400)
+          .json({
+            error:
+              "Unsupported file type. Please upload images, videos, PDFs, or text files.",
+          });
       }
-      
+
       // Increase size limit for videos and documents
-      const maxSize = file.mimetype.startsWith('video/') ? 50 * 1024 * 1024 : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
+      const maxSize = file.mimetype.startsWith("video/")
+        ? 50 * 1024 * 1024
+        : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
       if (file.size > maxSize) {
         const maxSizeMB = maxSize / (1024 * 1024);
-        return res.status(400).json({ error: `File size must be less than ${maxSizeMB}MB` });
+        return res
+          .status(400)
+          .json({ error: `File size must be less than ${maxSizeMB}MB` });
       }
-      
-      const fileName = `clans/${clanId}/messages/${Date.now()}-${file.originalname}`;
+
+      const fileName = `clans/${clanId}/messages/${Date.now()}-${
+        file.originalname
+      }`;
       const fileRef = storage.bucket().file(fileName);
       await fileRef.save(file.buffer, { contentType: file.mimetype });
       const [attachmentUrl] = await fileRef.getSignedUrl({
         action: "read",
         expires: "03-09-2491",
       });
-      
+
       return res.status(200).json({ attachment: attachmentUrl });
     }
-    
+
     // For regular messages (not uploadOnly), validate clan membership
     const clanRef = database.ref(`clans/${clanId}`);
     const clanSnapshot = await clanRef.once("value");
@@ -243,22 +318,39 @@ const sendGroupMessage = async (req, res) => {
     let attachmentUrl = "";
     if (req.file) {
       const file = req.file;
-      
+
       // Allow images, videos, and documents (same as uploadOnly section)
-      const allowedTypes = ['image/', 'video/', 'application/pdf', 'text/', 'application/'];
-      const isAllowedType = allowedTypes.some(type => file.mimetype.startsWith(type));
-      
+      const allowedTypes = [
+        "image/",
+        "video/",
+        "application/pdf",
+        "text/",
+        "application/",
+      ];
+      const isAllowedType = allowedTypes.some((type) =>
+        file.mimetype.startsWith(type)
+      );
+
       if (!isAllowedType) {
-        return res.status(400).json({ error: "Unsupported file type. Please upload images, videos, PDFs, or text files." });
+        return res
+          .status(400)
+          .json({
+            error:
+              "Unsupported file type. Please upload images, videos, PDFs, or text files.",
+          });
       }
-      
+
       // Increase size limit for videos and documents
-      const maxSize = file.mimetype.startsWith('video/') ? 50 * 1024 * 1024 : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
+      const maxSize = file.mimetype.startsWith("video/")
+        ? 50 * 1024 * 1024
+        : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
       if (file.size > maxSize) {
         const maxSizeMB = maxSize / (1024 * 1024);
-        return res.status(400).json({ error: `File size must be less than ${maxSizeMB}MB` });
+        return res
+          .status(400)
+          .json({ error: `File size must be less than ${maxSizeMB}MB` });
       }
-      
+
       const fileName = `clans/${clanId}/messages/${Date.now()}-${
         file.originalname
       }`;
@@ -326,46 +418,65 @@ const sendDirectMessage = async (req, res) => {
   try {
     const { recipientId, content, uploadOnly } = req.body;
     const senderId = req.user.uid;
-    
+
     // If uploadOnly flag is present, handle file upload only
-    if (uploadOnly === 'true') {
+    if (uploadOnly === "true") {
       if (!req.file) {
-        return res.status(400).json({ error: "File is required for upload only mode" });
+        return res
+          .status(400)
+          .json({ error: "File is required for upload only mode" });
       }
-      
+
       const file = req.file;
       // Allow images, videos, and documents
-      const allowedTypes = ['image/', 'video/', 'application/pdf', 'text/', 'application/'];
-      const isAllowedType = allowedTypes.some(type => file.mimetype.startsWith(type));
-      
+      const allowedTypes = [
+        "image/",
+        "video/",
+        "application/pdf",
+        "text/",
+        "application/",
+      ];
+      const isAllowedType = allowedTypes.some((type) =>
+        file.mimetype.startsWith(type)
+      );
+
       if (!isAllowedType) {
-        return res.status(400).json({ error: "Unsupported file type. Please upload images, videos, PDFs, or text files." });
+        return res
+          .status(400)
+          .json({
+            error:
+              "Unsupported file type. Please upload images, videos, PDFs, or text files.",
+          });
       }
-      
+
       // Increase size limit for videos and documents
-      const maxSize = file.mimetype.startsWith('video/') ? 50 * 1024 * 1024 : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
+      const maxSize = file.mimetype.startsWith("video/")
+        ? 50 * 1024 * 1024
+        : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
       if (file.size > maxSize) {
         const maxSizeMB = maxSize / (1024 * 1024);
-        return res.status(400).json({ error: `File size must be less than ${maxSizeMB}MB` });
+        return res
+          .status(400)
+          .json({ error: `File size must be less than ${maxSizeMB}MB` });
       }
-      
+
       const chatId = [senderId, recipientId].sort().join("_");
-      const fileName = `directMessages/${chatId}/${Date.now()}-${file.originalname}`;
+      const fileName = `directMessages/${chatId}/${Date.now()}-${
+        file.originalname
+      }`;
       const fileRef = storage.bucket().file(fileName);
       await fileRef.save(file.buffer, { contentType: file.mimetype });
       const [attachmentUrl] = await fileRef.getSignedUrl({
         action: "read",
         expires: "03-09-2491",
       });
-      
+
       return res.status(200).json({ attachment: attachmentUrl });
     }
-    
+
     // For regular messages (not uploadOnly), validate required fields
     if (!recipientId) {
-      return res
-        .status(400)
-        .json({ error: "Recipient ID is required" });
+      return res.status(400).json({ error: "Recipient ID is required" });
     }
     if (!content && !req.file) {
       return res
@@ -375,22 +486,39 @@ const sendDirectMessage = async (req, res) => {
     let attachmentUrl = "";
     if (req.file) {
       const file = req.file;
-      
+
       // Allow images, videos, and documents (same as uploadOnly section)
-      const allowedTypes = ['image/', 'video/', 'application/pdf', 'text/', 'application/'];
-      const isAllowedType = allowedTypes.some(type => file.mimetype.startsWith(type));
-      
+      const allowedTypes = [
+        "image/",
+        "video/",
+        "application/pdf",
+        "text/",
+        "application/",
+      ];
+      const isAllowedType = allowedTypes.some((type) =>
+        file.mimetype.startsWith(type)
+      );
+
       if (!isAllowedType) {
-        return res.status(400).json({ error: "Unsupported file type. Please upload images, videos, PDFs, or text files." });
+        return res
+          .status(400)
+          .json({
+            error:
+              "Unsupported file type. Please upload images, videos, PDFs, or text files.",
+          });
       }
-      
+
       // Increase size limit for videos and documents
-      const maxSize = file.mimetype.startsWith('video/') ? 50 * 1024 * 1024 : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
+      const maxSize = file.mimetype.startsWith("video/")
+        ? 50 * 1024 * 1024
+        : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
       if (file.size > maxSize) {
         const maxSizeMB = maxSize / (1024 * 1024);
-        return res.status(400).json({ error: `File size must be less than ${maxSizeMB}MB` });
+        return res
+          .status(400)
+          .json({ error: `File size must be less than ${maxSizeMB}MB` });
       }
-      
+
       const chatId = [senderId, recipientId].sort().join("_");
       const fileName = `directMessages/${chatId}/${Date.now()}-${
         file.originalname
@@ -561,7 +689,6 @@ const syncPresence = async (req, res) => {
 
 const createAnnouncement = async (req, res) => {
   try {
-
     const clanId = req.params.id;
     const userId = req.user.uid;
     const { content } = req.body;
@@ -629,7 +756,6 @@ const createAnnouncement = async (req, res) => {
 
 const getAnnouncements = async (req, res) => {
   try {
-
     const clanId = req.params.id;
     const userId = req.user.uid;
     const clanRef = database.ref(`clans/${clanId}`);
@@ -674,16 +800,18 @@ const getClanPublicMembers = async (req, res) => {
       const userSnapshot = await userRef.once("value");
       if (userSnapshot.exists()) {
         const userData = userSnapshot.val();
-        
+
         // Validate user data structure
         if (!userData) {
-          console.log('⚠️ User data is null for user:', member.userId);
+          console.log("⚠️ User data is null for user:", member.userId);
           continue;
         }
-        
+
         members.push({
           id: member.userId,
-          username: userData.username || (userData.email ? userData.email.split("@")[0] : "Unknown User"),
+          username:
+            userData.username ||
+            (userData.email ? userData.email.split("@")[0] : "Unknown User"),
           avatar: userData.avatar || "https://via.placeholder.com/40",
           joinedAt: member.joinedAt,
           points: userData.points || 0,
@@ -691,7 +819,11 @@ const getClanPublicMembers = async (req, res) => {
         });
       }
     }
-    return res.status(200).json(members.sort((a, b) => new Date(a.joinedAt) - new Date(b.joinedAt)));
+    return res
+      .status(200)
+      .json(
+        members.sort((a, b) => new Date(a.joinedAt) - new Date(b.joinedAt))
+      );
   } catch (error) {
     console.error("Error fetching public clan members:", error);
     return res.status(500).json({ error: "Failed to fetch clan members" });
@@ -702,6 +834,7 @@ module.exports = {
   getClans,
   createClan,
   joinClan,
+  leaveClan,
   getClanMembers,
   sendGroupMessage,
   getGroupMessages,
