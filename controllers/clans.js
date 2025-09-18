@@ -250,10 +250,11 @@ const sendGroupMessage = async (req, res) => {
       }
 
       const file = req.file;
-      // Allow images, videos, and documents
+      // Allow images, videos, audio, and documents
       const allowedTypes = [
         "image/",
         "video/",
+        "audio/",
         "application/pdf",
         "text/",
         "application/",
@@ -263,18 +264,16 @@ const sendGroupMessage = async (req, res) => {
       );
 
       if (!isAllowedType) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "Unsupported file type. Please upload images, videos, PDFs, or text files.",
-          });
+        return res.status(400).json({
+          error:
+            "Unsupported file type. Please upload images, videos, PDFs, or text files.",
+        });
       }
 
-      // Increase size limit for videos and documents
-      const maxSize = file.mimetype.startsWith("video/")
-        ? 50 * 1024 * 1024
-        : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
+      // Increase size limit for videos and audio; moderate for others
+      const isVideo = file.mimetype.startsWith("video/");
+      const isAudio = file.mimetype.startsWith("audio/");
+      const maxSize = isVideo || isAudio ? 50 * 1024 * 1024 : 5 * 1024 * 1024; // 50MB for video/audio, 5MB others
       if (file.size > maxSize) {
         const maxSizeMB = maxSize / (1024 * 1024);
         return res
@@ -319,10 +318,11 @@ const sendGroupMessage = async (req, res) => {
     if (req.file) {
       const file = req.file;
 
-      // Allow images, videos, and documents (same as uploadOnly section)
+      // Allow images, videos, audio, and documents (same as uploadOnly section)
       const allowedTypes = [
         "image/",
         "video/",
+        "audio/",
         "application/pdf",
         "text/",
         "application/",
@@ -332,18 +332,16 @@ const sendGroupMessage = async (req, res) => {
       );
 
       if (!isAllowedType) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "Unsupported file type. Please upload images, videos, PDFs, or text files.",
-          });
+        return res.status(400).json({
+          error:
+            "Unsupported file type. Please upload images, videos, PDFs, or text files.",
+        });
       }
 
-      // Increase size limit for videos and documents
-      const maxSize = file.mimetype.startsWith("video/")
-        ? 50 * 1024 * 1024
-        : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
+      // Increase size limit for videos and audio
+      const isVideo2 = file.mimetype.startsWith("video/");
+      const isAudio2 = file.mimetype.startsWith("audio/");
+      const maxSize = isVideo2 || isAudio2 ? 50 * 1024 * 1024 : 5 * 1024 * 1024; // 50MB for video/audio, 5MB others
       if (file.size > maxSize) {
         const maxSizeMB = maxSize / (1024 * 1024);
         return res
@@ -428,10 +426,11 @@ const sendDirectMessage = async (req, res) => {
       }
 
       const file = req.file;
-      // Allow images, videos, and documents
+      // Allow images, videos, audio, and documents
       const allowedTypes = [
         "image/",
         "video/",
+        "audio/",
         "application/pdf",
         "text/",
         "application/",
@@ -441,18 +440,16 @@ const sendDirectMessage = async (req, res) => {
       );
 
       if (!isAllowedType) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "Unsupported file type. Please upload images, videos, PDFs, or text files.",
-          });
+        return res.status(400).json({
+          error:
+            "Unsupported file type. Please upload images, videos, PDFs, or text files.",
+        });
       }
 
-      // Increase size limit for videos and documents
-      const maxSize = file.mimetype.startsWith("video/")
-        ? 50 * 1024 * 1024
-        : 5 * 1024 * 1024; // 50MB for videos, 5MB for others
+      // Increase size limit for videos and audio; moderate for others
+      const isVideo = file.mimetype.startsWith("video/");
+      const isAudio = file.mimetype.startsWith("audio/");
+      const maxSize = isVideo || isAudio ? 50 * 1024 * 1024 : 5 * 1024 * 1024; // 50MB for video/audio, 5MB others
       if (file.size > maxSize) {
         const maxSizeMB = maxSize / (1024 * 1024);
         return res
@@ -500,12 +497,10 @@ const sendDirectMessage = async (req, res) => {
       );
 
       if (!isAllowedType) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "Unsupported file type. Please upload images, videos, PDFs, or text files.",
-          });
+        return res.status(400).json({
+          error:
+            "Unsupported file type. Please upload images, videos, PDFs, or text files.",
+        });
       }
 
       // Increase size limit for videos and documents
