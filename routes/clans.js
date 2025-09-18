@@ -5,6 +5,7 @@ const {
   getClans,
   createClan,
   joinClan,
+  leaveClan,
   getClanMembers,
   sendGroupMessage,
   getGroupMessages,
@@ -23,8 +24,6 @@ const authenticate = require("../middleware/auth");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-
-
 // Fetch all clans
 router.get("/", getClans);
 
@@ -33,6 +32,9 @@ router.post("/", authenticate, upload.single("logo"), createClan);
 
 // Join a clan (direct join for clans with <5 members)
 router.post("/:id/join", authenticate, joinClan);
+
+// Leave a clan
+router.post("/:id/leave", authenticate, leaveClan);
 
 // Fetch clan members (for members only)
 router.get("/:id/members", authenticate, getClanMembers);
