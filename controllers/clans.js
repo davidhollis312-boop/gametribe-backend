@@ -693,11 +693,34 @@ const createAnnouncement = async (req, res) => {
       return res.status(404).json({ error: "Clan not found" });
     }
     const clan = clanSnapshot.val();
-    if (clan.adminId !== userId) {
-      return res
-        .status(403)
-        .json({ error: "Only the clan admin can create announcements" });
+
+    console.log("🔍 Debug createAnnouncement:", {
+      clanId,
+      userId,
+      clanMembers: clan.members,
+      isArray: Array.isArray(clan.members),
+      membersLength: clan.members?.length,
+    });
+
+    // Check if user is a member of the clan (not just admin)
+    const isMember =
+      Array.isArray(clan.members) &&
+      clan.members.some((member) => member.userId === userId);
+
+    console.log("🔍 Member check result:", {
+      isMember,
+      memberUserIds: clan.members?.map((m) => m.userId),
+      userId,
+    });
+
+    if (!isMember) {
+      console.log("❌ User is not a member of the clan");
+      return res.status(403).json({
+        error: "You must be a member of this clan to create announcements",
+      });
     }
+
+    console.log("✅ User is a member, proceeding with announcement creation");
     if (!content && !req.file) {
       return res
         .status(400)

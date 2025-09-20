@@ -1,94 +1,112 @@
-const Redis = require('ioredis');
-
-// ✅ NEW: Production-grade Redis caching service
+// ✅ NEW: Simple in-memory caching service (Redis replacement)
 class CacheService {
   constructor() {
-    this.redis = new Redis({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: process.env.REDIS_PORT || 6379,
-      password: process.env.REDIS_PASSWORD || undefined,
-      retryDelayOnFailover: 100,
-      maxRetriesPerRequest: 3,
-      lazyConnect: true,
-      keepAlive: 30000,
-      connectTimeout: 10000,
-      commandTimeout: 5000,
-    });
+    this.cache = new Map();
+    this.defaultTTL = 300; // 5 minutes default TTL
+    this.cleanupInterval = 60000; // 1 minute cleanup interval
 
-    this.redis.on('error', (err) => {
-      console.error('Redis connection error:', err);
-    });
+    // Start cleanup interval
+    this.startCleanup();
 
-    this.redis.on('connect', () => {
-      console.log('✅ Redis connected successfully');
-    });
-
-    this.redis.on('ready', () => {
-      console.log('✅ Redis ready for operations');
-    });
+    console.log("✅ In-memory cache service initialized");
   }
 
   // Generic cache operations
   async get(key) {
     try {
-      const value = await this.redis.get(key);
-      return value ? JSON.parse(value) : null;
+      const item = this.cache.get(key);
+      if (!item) return null;
+
+      // Check if expired
+      if (item.expiresAt && Date.now() > item.expiresAt) {
+        this.cache.delete(key);
+        return null;
+      }
+
+      return item.value;
     } catch (error) {
-      console.error('Cache get error:', error);
+      console.error("Cache get error:", error);
       return null;
     }
   }
 
-  async set(key, value, ttl = 300) {
+  async set(key, value, ttl = this.defaultTTL) {
     try {
-      await this.redis.setex(key, ttl, JSON.stringify(value));
+      const expiresAt = ttl > 0 ? Date.now() + ttl * 1000 : null;
+      this.cache.set(key, {
+        value,
+        expiresAt,
+        createdAt: Date.now(),
+      });
       return true;
     } catch (error) {
-      console.error('Cache set error:', error);
+      console.error("Cache set error:", error);
       return false;
     }
   }
 
   async del(key) {
     try {
-      await this.redis.del(key);
-      return true;
+      return this.cache.delete(key);
     } catch (error) {
-      console.error('Cache delete error:', error);
+      console.error("Cache delete error:", error);
       return false;
     }
   }
 
   async exists(key) {
     try {
-      const result = await this.redis.exists(key);
-      return result === 1;
+      const item = this.cache.get(key);
+      if (!item) return false;
+
+      // Check if expired
+      if (item.expiresAt && Date.now() > item.expiresAt) {
+        this.cache.delete(key);
+        return false;
+      }
+
+      return true;
     } catch (error) {
-      console.error('Cache exists error:', error);
+      console.error("Cache exists error:", error);
       return false;
     }
   }
 
   // Posts-specific caching
   async getPosts(page = 1, limit = 20, category = null, authorId = null) {
-    const key = `posts:${page}:${limit}:${category || 'all'}:${authorId || 'all'}`;
+    const key = `posts:${page}:${limit}:${category || "all"}:${
+      authorId || "all"
+    }`;
     return await this.get(key);
   }
 
-  async setPosts(posts, page = 1, limit = 20, category = null, authorId = null, ttl = 300) {
-    const key = `posts:${page}:${limit}:${category || 'all'}:${authorId || 'all'}`;
+  async setPosts(
+    posts,
+    page = 1,
+    limit = 20,
+    category = null,
+    authorId = null,
+    ttl = 300
+  ) {
+    const key = `posts:${page}:${limit}:${category || "all"}:${
+      authorId || "all"
+    }`;
     return await this.set(key, posts, ttl);
   }
 
   async invalidatePosts() {
     try {
-      const keys = await this.redis.keys('posts:*');
-      if (keys.length > 0) {
-        await this.redis.del(...keys);
+      const keysToDelete = [];
+      for (const key of this.cache.keys()) {
+        if (key.startsWith("posts:")) {
+          keysToDelete.push(key);
+        }
       }
+
+      keysToDelete.forEach((key) => this.cache.delete(key));
       return true;
     } catch (error) {
-      console.error('Cache invalidation error:', error);
+      console.error("Cache invalidation error:", error);
       return false;
     }
   }
@@ -153,12 +171,12 @@ class CacheService {
   }
 
   // Analytics caching
-  async getAnalytics(type, timeRange = '24h') {
+  async getAnalytics(type, timeRange = "24h") {
     const key = `analytics:${type}:${timeRange}`;
     return await this.get(key);
   }
 
-  async setAnalytics(type, data, timeRange = '24h', ttl = 3600) {
+  async setAnalytics(type, data, timeRange = "24h", ttl = 3600) {
     const key = `analytics:${type}:${timeRange}`;
     return await this.set(key, data, ttl);
   }
@@ -166,23 +184,21 @@ class CacheService {
   // Rate limiting
   async incrementRateLimit(key, window = 60) {
     try {
-      const current = await this.redis.incr(key);
-      if (current === 1) {
-        await this.redis.expire(key, window);
-      }
-      return current;
+      const current = (await this.get(key)) || 0;
+      const newValue = current + 1;
+      await this.set(key, newValue, window);
+      return newValue;
     } catch (error) {
-      console.error('Rate limit increment error:', error);
+      console.error("Rate limit increment error:", error);
       return 0;
     }
   }
 
   async getRateLimit(key) {
     try {
-      const current = await this.redis.get(key);
-      return current ? parseInt(current) : 0;
+      return (await this.get(key)) || 0;
     } catch (error) {
-      console.error('Rate limit get error:', error);
+      console.error("Rate limit get error:", error);
       return 0;
     }
   }
@@ -206,15 +222,30 @@ class CacheService {
   // Cache statistics
   async getStats() {
     try {
-      const info = await this.redis.info('memory');
-      const keyspace = await this.redis.info('keyspace');
+      const now = Date.now();
+      let totalItems = 0;
+      let expiredItems = 0;
+      let memoryUsage = 0;
+
+      for (const [key, item] of this.cache.entries()) {
+        totalItems++;
+        if (item.expiresAt && now > item.expiresAt) {
+          expiredItems++;
+        }
+        // Rough memory estimation
+        memoryUsage += JSON.stringify(item).length;
+      }
+
       return {
-        memory: info,
-        keyspace: keyspace,
-        connected: this.redis.status === 'ready'
+        totalItems,
+        expiredItems,
+        memoryUsageBytes: memoryUsage,
+        memoryUsageMB: (memoryUsage / 1024 / 1024).toFixed(2),
+        connected: true,
+        type: "in-memory",
       };
     } catch (error) {
-      console.error('Cache stats error:', error);
+      console.error("Cache stats error:", error);
       return null;
     }
   }
@@ -222,20 +253,77 @@ class CacheService {
   // Health check
   async healthCheck() {
     try {
-      await this.redis.ping();
-      return { status: 'healthy', timestamp: new Date().toISOString() };
+      // Simple health check - try to set and get a test value
+      const testKey = "health_check_test";
+      const testValue = Date.now();
+
+      await this.set(testKey, testValue, 10);
+      const retrieved = await this.get(testKey);
+      await this.del(testKey);
+
+      if (retrieved === testValue) {
+        return { status: "healthy", timestamp: new Date().toISOString() };
+      } else {
+        return {
+          status: "unhealthy",
+          error: "Cache read/write test failed",
+          timestamp: new Date().toISOString(),
+        };
+      }
     } catch (error) {
-      return { status: 'unhealthy', error: error.message, timestamp: new Date().toISOString() };
+      return {
+        status: "unhealthy",
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
     }
   }
 
-  // Close connection
+  // Cleanup expired items
+  startCleanup() {
+    setInterval(() => {
+      try {
+        const now = Date.now();
+        const keysToDelete = [];
+
+        for (const [key, item] of this.cache.entries()) {
+          if (item.expiresAt && now > item.expiresAt) {
+            keysToDelete.push(key);
+          }
+        }
+
+        keysToDelete.forEach((key) => this.cache.delete(key));
+
+        if (keysToDelete.length > 0) {
+          console.log(
+            `🧹 Cleaned up ${keysToDelete.length} expired cache items`
+          );
+        }
+      } catch (error) {
+        console.error("Cache cleanup error:", error);
+      }
+    }, this.cleanupInterval);
+  }
+
+  // Clear all cache
+  async clear() {
+    try {
+      this.cache.clear();
+      console.log("✅ Cache cleared");
+      return true;
+    } catch (error) {
+      console.error("Error clearing cache:", error);
+      return false;
+    }
+  }
+
+  // Close connection (for compatibility)
   async close() {
     try {
-      await this.redis.quit();
-      console.log('✅ Redis connection closed');
+      this.cache.clear();
+      console.log("✅ In-memory cache service closed");
     } catch (error) {
-      console.error('Error closing Redis connection:', error);
+      console.error("Error closing cache service:", error);
     }
   }
 }

@@ -2,18 +2,18 @@
 
 /**
  * Environment Setup Script for GameTribe Community Backend
- * 
+ *
  * This script helps you create a .env file with all required environment variables.
  * Run: node setup-env.js
  */
 
-const fs = require('fs');
-const path = require('path');
-const readline = require('readline');
+const fs = require("fs");
+const path = require("path");
+const readline = require("readline");
 
 const rl = readline.createInterface({
   input: process.stdin,
-  output: process.stdout
+  output: process.stdout,
 });
 
 const envTemplate = `# GameTribe Community Backend Environment Configuration
@@ -63,10 +63,8 @@ EMAIL_PASSWORD=your_app_password_here
 # CACHING & PERFORMANCE (OPTIONAL)
 # =============================================================================
 
-# Redis Configuration
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=
+# Note: Caching is now handled by in-memory cache service
+# No external cache configuration needed
 
 # =============================================================================
 # MONITORING & ANALYTICS (OPTIONAL)
@@ -146,17 +144,16 @@ COMMUNITY_PLATFORM_CLIENT=https://hub.gametribe.com
 #    - Generate an App Password for "Mail"
 #    - Use that password in EMAIL_PASSWORD
 
-# 4. REDIS SETUP (Optional):
-#    - Install Redis locally or use a cloud service
-#    - Default configuration works for local development
-#    - Set REDIS_PASSWORD for production
+# 4. CACHING SETUP (Optional):
+#    - Caching is now handled by in-memory cache service
+#    - No external cache setup required
 
-# 5. SENTRY SETUP (Optional but recommended for production):
+# 4. SENTRY SETUP (Optional but recommended for production):
 #    - Create account at https://sentry.io/
 #    - Create new project and get DSN
 #    - Add DSN to SENTRY_DSN
 
-# 6. M-PESA SETUP (Optional - Kenya only):
+# 5. M-PESA SETUP (Optional - Kenya only):
 #    - Register with Safaricom M-Pesa API
 #    - Get consumer key, secret, shortcode, and passkey
 #    - Set up callback URL for payment notifications
@@ -169,46 +166,47 @@ COMMUNITY_PLATFORM_CLIENT=https://hub.gametribe.com
 # - Use test keys for development, live keys for production
 # - Keep Firebase service account key secure
 # - Use app-specific passwords for email services
-# - Set strong passwords for Redis in production
+# - Monitor memory usage for in-memory cache
 # - Regularly rotate API keys and secrets`;
 
 function question(query) {
-  return new Promise(resolve => rl.question(query, resolve));
+  return new Promise((resolve) => rl.question(query, resolve));
 }
 
 async function setupEnvironment() {
-  console.log('🚀 GameTribe Community Backend Environment Setup');
-  console.log('================================================\n');
+  console.log("🚀 GameTribe Community Backend Environment Setup");
+  console.log("================================================\n");
 
   // Check if .env already exists
-  const envPath = path.join(__dirname, '.env');
+  const envPath = path.join(__dirname, ".env");
   if (fs.existsSync(envPath)) {
-    const overwrite = await question('⚠️  .env file already exists. Overwrite? (y/N): ');
-    if (overwrite.toLowerCase() !== 'y' && overwrite.toLowerCase() !== 'yes') {
-      console.log('❌ Setup cancelled.');
+    const overwrite = await question(
+      "⚠️  .env file already exists. Overwrite? (y/N): "
+    );
+    if (overwrite.toLowerCase() !== "y" && overwrite.toLowerCase() !== "yes") {
+      console.log("❌ Setup cancelled.");
       rl.close();
       return;
     }
   }
 
-  console.log('📝 Creating .env file with default configuration...\n');
+  console.log("📝 Creating .env file with default configuration...\n");
 
   try {
     fs.writeFileSync(envPath, envTemplate);
-    console.log('✅ .env file created successfully!');
-    console.log('\n📋 Next Steps:');
-    console.log('1. Edit the .env file with your actual configuration values');
-    console.log('2. Set up Firebase service account (firebase-adminsdk.json)');
-    console.log('3. Configure Stripe API keys');
-    console.log('4. Set up email service (optional)');
-    console.log('5. Configure Redis for caching (optional)');
-    console.log('\n🔐 Security Reminder:');
-    console.log('- Never commit .env file to version control');
-    console.log('- Use test keys for development, live keys for production');
-    console.log('- Keep all API keys and secrets secure');
-    
+    console.log("✅ .env file created successfully!");
+    console.log("\n📋 Next Steps:");
+    console.log("1. Edit the .env file with your actual configuration values");
+    console.log("2. Set up Firebase service account (firebase-adminsdk.json)");
+    console.log("3. Configure Stripe API keys");
+    console.log("4. Set up email service (optional)");
+    console.log("5. Configure caching (now handled automatically)");
+    console.log("\n🔐 Security Reminder:");
+    console.log("- Never commit .env file to version control");
+    console.log("- Use test keys for development, live keys for production");
+    console.log("- Keep all API keys and secrets secure");
   } catch (error) {
-    console.error('❌ Error creating .env file:', error.message);
+    console.error("❌ Error creating .env file:", error.message);
   }
 
   rl.close();
