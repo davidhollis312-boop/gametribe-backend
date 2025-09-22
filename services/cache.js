@@ -73,10 +73,16 @@ class CacheService {
   }
 
   // Posts-specific caching
-  async getPosts(page = 1, limit = 20, category = null, authorId = null) {
+  async getPosts(
+    page = 1,
+    limit = 20,
+    category = null,
+    authorId = null,
+    clanId = null
+  ) {
     const key = `posts:${page}:${limit}:${category || "all"}:${
       authorId || "all"
-    }`;
+    }:${clanId || "all"}`;
     return await this.get(key);
   }
 
@@ -86,11 +92,12 @@ class CacheService {
     limit = 20,
     category = null,
     authorId = null,
+    clanId = null,
     ttl = 300
   ) {
     const key = `posts:${page}:${limit}:${category || "all"}:${
       authorId || "all"
-    }`;
+    }:${clanId || "all"}`;
     return await this.set(key, posts, ttl);
   }
 

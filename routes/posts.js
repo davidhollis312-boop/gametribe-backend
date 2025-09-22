@@ -7,10 +7,11 @@ const {
   likeLimiter,
   commentLimiter,
   repostLimiter,
-  generalLimiter
+  generalLimiter,
 } = require("../middleware/rateLimiter");
 const {
   getPosts,
+  getPost,
   createPost,
   updatePost,
   deletePost,
@@ -31,8 +32,21 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 router.get("/", generalLimiter, getPosts);
-router.post("/", authenticate, postCreationLimiter, upload.single("image"), createPost);
-router.put("/:postId", authenticate, postCreationLimiter, upload.single("image"), updatePost);
+router.get("/:postId", authenticate, getPost);
+router.post(
+  "/",
+  authenticate,
+  postCreationLimiter,
+  upload.single("image"),
+  createPost
+);
+router.put(
+  "/:postId",
+  authenticate,
+  postCreationLimiter,
+  upload.single("image"),
+  updatePost
+);
 router.delete("/:postId", authenticate, deletePost);
 router.post("/:id/like", authenticate, likeLimiter, likePost);
 router.post("/:postId/repost", authenticate, repostLimiter, repostPost);
@@ -57,12 +71,16 @@ router.post(
   commentLimiter,
   upload.single("attachment"),
   (req, res, next) => {
-
     next();
   },
   createReply
 );
-router.put("/:postId/comments/:commentId/like", authenticate, likeLimiter, likeComment);
+router.put(
+  "/:postId/comments/:commentId/like",
+  authenticate,
+  likeLimiter,
+  likeComment
+);
 router.put(
   "/:postId/comments/:commentId/replies/:replyId/like",
   authenticate,

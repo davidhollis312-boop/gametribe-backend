@@ -56,11 +56,75 @@ const containsInappropriateContent = (content) => {
   return inappropriateWords.some((word) => lowerContent.includes(word));
 };
 
+const getPost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const userId = req.user?.uid;
+
+    if (!postId) {
+      return res.status(400).json({ error: "Post ID is required" });
+    }
+
+    const postRef = database.ref(`posts/${postId}`);
+    const snapshot = await postRef.once("value");
+
+    if (!snapshot.exists()) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    const postData = snapshot.val();
+
+    // Process the post data similar to getPosts
+    const processedPost = {
+      id: postId,
+      ...postData,
+      likes: postData.likes || 0,
+      likedBy: Array.isArray(postData.likedBy) ? postData.likedBy : [],
+      liked:
+        userId && Array.isArray(postData.likedBy)
+          ? postData.likedBy.includes(userId)
+          : false,
+      repostCount: postData.repostCount || 0,
+      directRepostCount: postData.directRepostCount || 0,
+      repostedBy: Array.isArray(postData.repostedBy) ? postData.repostedBy : [],
+      reposted:
+        userId && Array.isArray(postData.repostedBy)
+          ? postData.repostedBy.includes(userId)
+          : false,
+      repostChain: postData.repostChain || [],
+      originalAuthor: postData.originalAuthor || null,
+      originalPostId: postData.originalPostId || null,
+    };
+
+    return res.status(200).json(processedPost);
+  } catch (error) {
+    console.error("Error fetching post:", error);
+    return res.status(500).json({ error: "Failed to fetch post" });
+  }
+};
+
 const getPosts = async (req, res) => {
   const startTime = Date.now();
   try {
     const userId = req.user?.uid;
-    const { page = 1, limit = 20, category, authorId, lastPostId } = req.query;
+    const {
+      page = 1,
+      limit = 20,
+      category,
+      authorId,
+      lastPostId,
+      clanId,
+    } = req.query;
+
+    console.log("🔍 GET POSTS - Request received:", {
+      userId,
+      category,
+      clanId,
+      authorId,
+      page,
+      limit,
+      query: req.query,
+    });
 
     // ✅ NEW: Input validation
     const pageNum = parseInt(page);
@@ -73,18 +137,25 @@ const getPosts = async (req, res) => {
       });
     }
 
-    // ✅ NEW: Check cache first
+    // ✅ NEW: Check cache first (disabled for clan posts to debug)
     const cacheKey = `posts:${pageNum}:${limitNum}:${category || "all"}:${
       authorId || "all"
-    }`;
-    const cachedPosts = await cacheService.getPosts(
-      pageNum,
-      limitNum,
-      category,
-      authorId
-    );
+    }:${clanId || "all"}`;
+
+    // Skip cache for clan posts to debug the issue
+    let cachedPosts = null;
+    if (category !== "clan") {
+      cachedPosts = await cacheService.getPosts(
+        pageNum,
+        limitNum,
+        category,
+        authorId,
+        clanId
+      );
+    }
 
     if (cachedPosts) {
+      console.log("🔍 Using cached posts:", cachedPosts);
       monitoringService.trackCacheHit("posts");
       monitoringService.trackHttpRequest(
         req.method,
@@ -116,6 +187,23 @@ const getPosts = async (req, res) => {
 
     const snapshot = await query.once("value");
     const postsData = snapshot.val() || {};
+
+    console.log(
+      "🔍 Raw posts data from database:",
+      Object.keys(postsData).length,
+      "posts"
+    );
+    console.log(
+      "🔍 Sample posts:",
+      Object.entries(postsData)
+        .slice(0, 3)
+        .map(([id, data]) => ({
+          id,
+          category: data.category,
+          clanId: data.clanId,
+          author: data.author,
+        }))
+    );
 
     // Convert to array and sort
     let posts = Object.entries(postsData).map(([id, data]) => ({
@@ -149,11 +237,46 @@ const getPosts = async (req, res) => {
 
     // ✅ NEW: Apply filters
     if (category) {
+      console.log("🔍 Filtering posts by category:", category);
+      console.log("🔍 Total posts before category filtering:", posts.length);
       posts = posts.filter((post) => post.category === category);
+      console.log("🔍 Posts after category filtering:", posts.length);
+      console.log(
+        "🔍 Category filtered posts:",
+        posts.map((p) => ({ id: p.id, category: p.category, clanId: p.clanId }))
+      );
     }
 
     if (authorId) {
       posts = posts.filter((post) => post.authorId === authorId);
+    }
+
+    if (clanId) {
+      console.log(
+        "🔍 Filtering posts by clanId:",
+        clanId,
+        "type:",
+        typeof clanId
+      );
+      console.log("🔍 Total posts before filtering:", posts.length);
+      posts = posts.filter((post) => {
+        const postClanId = post.clanId;
+        const matches = String(postClanId) === String(clanId);
+        console.log("🔍 Post clanId comparison:", {
+          postId: post.id,
+          postClanId,
+          postClanIdType: typeof postClanId,
+          filterClanId: clanId,
+          filterClanIdType: typeof clanId,
+          matches,
+        });
+        return matches;
+      });
+      console.log("🔍 Posts after clanId filtering:", posts.length);
+      console.log(
+        "🔍 Filtered posts:",
+        posts.map((p) => ({ id: p.id, clanId: p.clanId, category: p.category }))
+      );
     }
 
     const response = {
@@ -167,14 +290,17 @@ const getPosts = async (req, res) => {
       },
     };
 
-    // ✅ NEW: Cache the results
-    await cacheService.setPosts(
-      response,
-      pageNum,
-      limitNum,
-      category,
-      authorId
-    );
+    // ✅ NEW: Cache the results (skip for clan posts to debug)
+    if (category !== "clan") {
+      await cacheService.setPosts(
+        response,
+        pageNum,
+        limitNum,
+        category,
+        authorId,
+        clanId
+      );
+    }
 
     // ✅ NEW: Track metrics
     monitoringService.trackDatabaseOperation(
@@ -199,7 +325,7 @@ const getPosts = async (req, res) => {
 const createPost = async (req, res) => {
   try {
     const userId = req.user.uid;
-    const { content, category, imageLink } = req.body;
+    const { content, category, imageLink, clanId } = req.body;
 
     console.log("🔍 CREATE POST DEBUG - Request received:", {
       userId,
@@ -208,6 +334,7 @@ const createPost = async (req, res) => {
       contentLength: content ? content.length : 0,
       contentPreview: content ? content.substring(0, 100) + "..." : "null",
       category,
+      clanId,
       imageLink,
       hasFile: !!req.file,
       fileInfo: req.file
@@ -462,6 +589,7 @@ const createPost = async (req, res) => {
       authorImage: userData.avatar || "",
       content: sanitizedContent,
       category: sanitizeInput(category) || "",
+      clanId: sanitizeInput(clanId) || null,
       image: imageUrl,
       mediaType: mediaType,
       duration: duration,
@@ -485,6 +613,7 @@ const createPost = async (req, res) => {
       author: newPost.author,
       contentLength: newPost.content.length,
       category: newPost.category,
+      clanId: newPost.clanId,
       hasImage: !!newPost.image,
       mediaType: newPost.mediaType,
       duration: newPost.duration,
@@ -554,7 +683,8 @@ const likePost = async (req, res) => {
       return res.status(404).json({ error: "Post not found" });
     }
     const postData = result.snapshot.val();
-    const isLiked = postData.likedBy.includes(userId);
+    const likedBy = Array.isArray(postData.likedBy) ? postData.likedBy : [];
+    const isLiked = likedBy.includes(userId);
 
     // Add points for liking (only when liking, not unliking)
     if (isLiked) {
@@ -1025,7 +1155,8 @@ const repostPost = async (req, res) => {
       authorImage: userData.avatar || "",
       content: comment || "", // Optional comment
       category: originalPost.category || "",
-      image: originalPost.image || "", // Preserve original post's media
+      clanId: originalPost.clanId || null, // Preserve original post's clanId
+      image: originalPost.image || originalPost.attachment || "", // Preserve original post's media
       mediaType: originalPost.mediaType || "", // Preserve media type
       duration: originalPost.duration || null, // Preserve duration for videos
       createdAt: new Date().toISOString(),
@@ -1039,24 +1170,28 @@ const repostPost = async (req, res) => {
       originalPostId: postId, // Points to the original post being reposted
       originalPost: {
         id: originalPost.id || postId, // ✅ Use postId if originalPost.id is missing
-        author: originalPost.author,
-        authorId: originalPost.authorId,
-        authorImage: originalPost.authorImage || "", // ✅ Include author image
+        author: originalPost.author || originalPost.sender,
+        authorId: originalPost.authorId || originalPost.senderId,
+        authorImage:
+          originalPost.authorImage || originalPost.senderAvatar || "", // ✅ Include author image
         content: originalPost.content,
-        image: originalPost.image || "",
+        image: originalPost.image || originalPost.attachment || "",
         mediaType: originalPost.mediaType || "", // Include media type
         duration: originalPost.duration || null, // Include duration
         category: originalPost.category || "",
+        clanId: originalPost.clanId || null, // Include clanId
         createdAt: originalPost.createdAt,
       },
       repostChain: repostChain, // Always just the original post since no nested reposts
-      originalAuthor: originalPost.author, // Always points to the original author
+      originalAuthor: originalPost.author || originalPost.sender, // Always points to the original author
     };
 
     console.log("🔍 Backend repost data being created:", {
       repostId,
       originalImage: originalPost.image,
       originalMediaType: originalPost.mediaType,
+      originalClanId: originalPost.clanId,
+      repostClanId: repostData.clanId,
       repostImage: repostData.image,
       repostMediaType: repostData.mediaType,
       originalPostImage: repostData.originalPost.image,
@@ -1786,6 +1921,7 @@ const cleanupOrphanedData = async (req, res) => {
 
 module.exports = {
   getPosts,
+  getPost,
   createPost,
   updatePost,
   deletePost,
