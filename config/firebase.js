@@ -6,7 +6,7 @@ try {
   const app = admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
     databaseURL: "https://gametibe2025-default-rtdb.firebaseio.com",
-    storageBucket: "gametibe2025.firebasestorage.app",
+    storageBucket: "gasometibe2025.firebasestorage.app",
   });
 
   const auth = admin.auth();

@@ -146,12 +146,12 @@ const getPosts = async (req, res) => {
     let cachedPosts = null;
     if (category !== "clan") {
       cachedPosts = await cacheService.getPosts(
-        pageNum,
-        limitNum,
-        category,
+      pageNum,
+      limitNum,
+      category,
         authorId,
         clanId
-      );
+    );
     }
 
     if (cachedPosts) {
@@ -292,14 +292,14 @@ const getPosts = async (req, res) => {
 
     // ✅ NEW: Cache the results (skip for clan posts to debug)
     if (category !== "clan") {
-      await cacheService.setPosts(
-        response,
-        pageNum,
-        limitNum,
-        category,
+    await cacheService.setPosts(
+      response,
+      pageNum,
+      limitNum,
+      category,
         authorId,
         clanId
-      );
+    );
     }
 
     // ✅ NEW: Track metrics
@@ -326,6 +326,8 @@ const createPost = async (req, res) => {
   try {
     const userId = req.user.uid;
     const { content, category, imageLink, clanId } = req.body;
+    const trimStartRaw = req.body.trimStart;
+    const trimEndRaw = req.body.trimEnd;
 
     console.log("🔍 CREATE POST DEBUG - Request received:", {
       userId,
@@ -346,6 +348,8 @@ const createPost = async (req, res) => {
         : null,
       bodyKeys: Object.keys(req.body),
       allBodyData: req.body,
+      trimStartRaw,
+      trimEndRaw,
     });
 
     // ✅ NEW: Enhanced input validation
@@ -518,7 +522,7 @@ const createPost = async (req, res) => {
           .json({ error: "Only image, video, and audio files are allowed" });
       }
 
-      // For videos, validate duration (1 minute max)
+      // For videos, validate duration (1 minute max) and capture trim window
       if (file.mimetype.startsWith("video/")) {
         mediaType = "video";
 
@@ -536,6 +540,11 @@ const createPost = async (req, res) => {
           }
           duration = videoDuration;
         }
+
+        // Capture trim metadata if present
+        const ts = trimStartRaw !== undefined ? Number(trimStartRaw) : null;
+        const te = trimEndRaw !== undefined ? Number(trimEndRaw) : null;
+        console.log("🔧 Video trim params received:", { ts, te });
       } else if (file.mimetype.startsWith("audio/")) {
         mediaType = "audio";
 
@@ -555,8 +564,122 @@ const createPost = async (req, res) => {
         }
       }
 
-      const fileName = `posts/${Date.now()}-${file.originalname}`;
-      // Use unified storage utility method (handles both Firebase and fallback)
+      const fileNameBase = `posts/${Date.now()}-${file.originalname}`;
+      const fileName = fileNameBase;
+
+      // If a video and valid trim window provided (0 <= start < end <= 60), attempt server-side trim with ffmpeg
+      const ts = trimStartRaw !== undefined ? Number(trimStartRaw) : null;
+      const te = trimEndRaw !== undefined ? Number(trimEndRaw) : null;
+      const shouldTrim =
+        file.mimetype.startsWith("video/") &&
+        ts !== null &&
+        te !== null &&
+        Number.isFinite(ts) &&
+        Number.isFinite(te) &&
+        ts >= 0 &&
+        te > ts &&
+        te - ts <= 60;
+
+      if (shouldTrim) {
+        console.log("🎬 Trimming video on server:", {
+          trimStart: ts,
+          trimEnd: te,
+          originalName: file.originalname,
+        });
+        try {
+          // Lazy import to avoid requiring ffmpeg when not needed
+          const ffmpeg = require("fluent-ffmpeg");
+          try {
+            const ffmpegInstaller = require("@ffmpeg-installer/ffmpeg");
+            if (ffmpegInstaller && ffmpegInstaller.path) {
+              ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+              console.log("🔧 ffmpeg path set:", ffmpegInstaller.path);
+            }
+          } catch (e) {
+            console.warn(
+              "⚠️ @ffmpeg-installer/ffmpeg not available; relying on system ffmpeg in PATH"
+            );
+          }
+          const os = require("os");
+          const fs = require("fs");
+          const path = require("path");
+
+          const tmpDir = os.tmpdir();
+          const inputTmp = path.join(tmpDir, `gt-input-${Date.now()}.mp4`);
+          const outputTmp = path.join(tmpDir, `gt-output-${Date.now()}.mp4`);
+
+          // Write input to temp file
+          fs.writeFileSync(inputTmp, file.buffer);
+          console.log(
+            "📝 Wrote temp input:",
+            inputTmp,
+            fs.statSync(inputTmp).size,
+            "bytes"
+          );
+
+          // Run ffmpeg on files
+          await new Promise((resolve, reject) => {
+            ffmpeg(inputTmp)
+              .setStartTime(ts)
+              .setDuration(te - ts)
+              .outputOptions(["-movflags +faststart"]) // better streaming
+              .output(outputTmp)
+              .on("error", (err) => {
+                console.error(
+                  "❌ ffmpeg file trim error:",
+                  err?.message || err
+                );
+                reject(err);
+              })
+              .on("end", () => {
+                console.log("✅ ffmpeg file trim complete:", outputTmp);
+                resolve();
+              })
+              .run();
+          });
+
+          const trimmedBuffer = fs.readFileSync(outputTmp);
+          console.log("📦 Trimmed bytes:", trimmedBuffer.length);
+
+          // Upload trimmed buffer instead of original
+          const trimmedFile = {
+            originalname: file.originalname.replace(/\.(\w+)$/, "-trimmed.$1"),
+            mimetype: "video/mp4",
+            size: trimmedBuffer.length,
+            buffer: trimmedBuffer,
+            fieldname: file.fieldname,
+          };
+          const uploaded = await storage.uploadFile(trimmedFile, fileName);
+          if (uploaded && uploaded.url) {
+            imageUrl = uploaded.url;
+          } else if (uploaded && typeof uploaded.getSignedUrl === "function") {
+            const [signedUrl] = await uploaded.getSignedUrl({
+              action: "read",
+              expires: "03-09-2491",
+            });
+            imageUrl = signedUrl;
+          }
+
+          // Set duration to trimmed length if provided previously or recompute approx
+          duration = Math.min(60, te - ts);
+          console.log("✅ Uploaded trimmed video:", {
+            fileName,
+            urlSet: !!imageUrl,
+            duration,
+          });
+
+          // Cleanup temp files
+          try {
+            fs.unlinkSync(inputTmp);
+          } catch {}
+          try {
+            fs.unlinkSync(outputTmp);
+          } catch {}
+        } catch (trimErr) {
+          console.warn(
+            "⚠️ Trimming failed, uploading original video:",
+            trimErr?.message || trimErr
+          );
       const uploaded = await storage.uploadFile(file, fileName);
       if (uploaded && uploaded.url) {
         imageUrl = uploaded.url;
@@ -566,6 +689,28 @@ const createPost = async (req, res) => {
           expires: "03-09-2491",
         });
         imageUrl = signedUrl;
+          }
+        }
+      } else {
+        console.log("ℹ️ Skipping trim:", {
+          isVideo: file.mimetype.startsWith("video/"),
+          ts,
+          te,
+          tsFinite: Number.isFinite(ts),
+          teFinite: Number.isFinite(te),
+          validWindow: te && ts !== null ? te > ts && te - ts <= 60 : false,
+        });
+        // No trimming requested/valid; upload original
+        const uploaded = await storage.uploadFile(file, fileName);
+        if (uploaded && uploaded.url) {
+          imageUrl = uploaded.url;
+        } else if (uploaded && typeof uploaded.getSignedUrl === "function") {
+          const [signedUrl] = await uploaded.getSignedUrl({
+            action: "read",
+            expires: "03-09-2491",
+          });
+          imageUrl = signedUrl;
+        }
       }
     } else if (imageLink) {
       // For URL-based media, determine type from extension

@@ -4,6 +4,20 @@ dotenv.config();
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
+
+// Import new middleware
+const { sanitizeContent } = require("./middleware/contentSanitizer");
+const {
+  upload,
+  handleFileValidationError,
+} = require("./middleware/fileValidator");
+const {
+  validateUrlMiddleware,
+  rateLimitOgRequests,
+  getCachedOgData,
+  setCachedOgData,
+} = require("./middleware/urlValidator");
+const { processRequestData } = require("./middleware/dataProcessor");
 const postsRouter = require("./routes/posts");
 const clansRouter = require("./routes/clans");
 const usersRouter = require("./routes/users");
@@ -16,6 +30,7 @@ const { stripeWebhook } = require("./controllers/payment");
 // ✅ NEW: Import production-grade routes
 const analyticsRouter = require("./routes/analytics");
 const searchRouter = require("./routes/search");
+const gameScoresRouter = require("./routes/gameScores");
 
 const app = express();
 
@@ -27,29 +42,24 @@ const MAX_REQUESTS_PER_WINDOW = 10; // Max 10 requests per minute per IP
 const checkRateLimit = (ip) => {
   const now = Date.now();
   const userRequests = rateLimitMap.get(ip) || [];
-  
+
   // Remove old requests outside the window
-  const recentRequests = userRequests.filter(time => now - time < RATE_LIMIT_WINDOW);
-  
+  const recentRequests = userRequests.filter(
+    (time) => now - time < RATE_LIMIT_WINDOW
+  );
+
   if (recentRequests.length >= MAX_REQUESTS_PER_WINDOW) {
     return false; // Rate limit exceeded
   }
-  
+
   // Add current request
   recentRequests.push(now);
   rateLimitMap.set(ip, recentRequests);
-  
+
   return true; // Request allowed
 };
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB limit for videos (20 minutes)
-    fieldSize: 10 * 1024 * 1024, // 10MB for fields
-    parts: 10, // Max 10 parts (fields + files)
-  },
-});
+// upload is already imported from fileValidator middleware
 
 // Apply CORS
 app.use(
@@ -103,88 +113,106 @@ app.use("/api/contact", contactRouter);
 // ✅ NEW: Mount production-grade routes
 app.use("/api/analytics", analyticsRouter);
 app.use("/api/search", searchRouter);
+app.use("/api/game-scores", gameScoresRouter);
 
 // Add auth route for cross-platform authentication
 app.use("/api/auth", require("./routes/auth"));
 
-// Open Graph unfurl endpoint using proper scraper
-app.get("/api/og", async (req, res) => {
-  try {
-    let targetUrl = req.query.url;
-    if (!targetUrl) {
-      return res.status(400).json({ error: "Missing url parameter" });
-    }
-
-    // Clean and validate URL
-    targetUrl = decodeURIComponent(targetUrl);
-    
-    // Remove any HTML tags that might have been included
-    targetUrl = targetUrl.replace(/<[^>]*>/g, '').trim();
-    
-    // Validate URL format
-    if (!/^https?:\/\//i.test(targetUrl)) {
-      return res.status(400).json({ error: "Invalid URL format" });
-    }
-
-    // Additional validation using URL constructor
+// Open Graph unfurl endpoint using proper scraper with new middleware
+app.get(
+  "/api/og",
+  rateLimitOgRequests,
+  validateUrlMiddleware,
+  async (req, res) => {
     try {
-      new URL(targetUrl);
-    } catch (urlError) {
-      return res.status(400).json({ error: "Invalid URL", details: urlError.message });
-    }
-    
-    const ogScraper = require('./utils/ogScraper');
-    const data = await ogScraper.scrape(targetUrl);
-    res.json(data);
-  } catch (e) {
-    console.error("/api/og error", e.message);
-    
-    // Handle specific error types more gracefully
-    if (e.message.includes('503') || e.message.includes('Service Unavailable')) {
-      res.status(503).json({ 
-        error: "Website temporarily unavailable", 
-        details: "The target website is currently unavailable. Please try again later." 
+      const targetUrl = req.validatedUrl;
+
+      // Check cache first
+      const cached = getCachedOgData(targetUrl);
+      if (cached) {
+        return res.json({
+          ...cached,
+          cached: true,
+        });
+      }
+
+      const ogScraper = require("./utils/ogScraper");
+      const data = await ogScraper.scrape(targetUrl);
+
+      // Cache the result
+      setCachedOgData(targetUrl, data);
+
+      res.json({
+        ...data,
+        cached: false,
       });
-    } else if (e.message.includes('404') || e.message.includes('Not Found')) {
-      res.status(404).json({ 
-        error: "Page not found", 
-        details: "The requested page could not be found." 
-      });
-    } else if (e.message.includes('403') || e.message.includes('Forbidden')) {
-      res.status(403).json({ 
-        error: "Access denied", 
-        details: "Access to this website is forbidden." 
-      });
-    } else {
-      res.status(500).json({ error: "Failed to unfurl url", details: e.message });
+    } catch (e) {
+      console.error("/api/og error", e.message);
+
+      // Handle specific error types more gracefully
+      if (
+        e.message.includes("503") ||
+        e.message.includes("Service Unavailable")
+      ) {
+        res.status(503).json({
+          error: "Website temporarily unavailable",
+          details:
+            "The target website is currently unavailable. Please try again later.",
+        });
+      } else if (e.message.includes("404") || e.message.includes("Not Found")) {
+        res.status(404).json({
+          error: "Page not found",
+          details: "The requested page could not be found.",
+        });
+      } else if (e.message.includes("403") || e.message.includes("Forbidden")) {
+        res.status(403).json({
+          error: "Access denied",
+          details: "Access to this website is forbidden.",
+        });
+      } else {
+        res
+          .status(500)
+          .json({ error: "Failed to unfurl url", details: e.message });
+      }
     }
   }
-});
+);
 
 // OpenStreetMap Nominatim API endpoint (Free alternative to Google Places)
 app.get("/api/places/search", async (req, res) => {
   try {
     const { query, lat, lng } = req.query;
-    const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+    const clientIP = req.ip || req.connection.remoteAddress || "unknown";
 
     // Check rate limit
     if (!checkRateLimit(clientIP)) {
       return res.status(429).json({
         error: "Rate limit exceeded",
-        message: "Too many requests. Please wait a moment before searching again."
+        message:
+          "Too many requests. Please wait a moment before searching again.",
       });
     }
-    
+
     if (!query || query.length < 3) {
-      console.log('Query validation failed:', { query, length: query?.length });
-      return res.status(400).json({ error: "Query must be at least 3 characters long" });
+      console.log("Query validation failed:", { query, length: query?.length });
+      return res
+        .status(400)
+        .json({ error: "Query must be at least 3 characters long" });
     }
 
-    console.log('Places search request:', { query, lat, lng, queryLength: query.length, clientIP });
+    console.log("Places search request:", {
+      query,
+      lat,
+      lng,
+      queryLength: query.length,
+      clientIP,
+    });
 
     // Build Nominatim API URL with optional location bias
-    let apiUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&addressdetails=1&extratags=1`;
-    
+    let apiUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+      query
+    )}&limit=5&addressdetails=1&extratags=1`;
+
     // Add location bias if coordinates are provided (prioritize nearby results)
     if (lat && lng) {
       // Use viewbox for location bias but don't restrict results to only within the box
@@ -199,111 +227,126 @@ app.get("/api/places/search", async (req, res) => {
     }
 
     // Debug: Log the API URL being called
-    console.log('Nominatim API URL:', apiUrl);
+    console.log("Nominatim API URL:", apiUrl);
 
     // Add a small delay to be respectful to Nominatim API
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Use OpenStreetMap Nominatim API (completely free, no billing required)
     // Add proper headers to comply with Nominatim usage policy
     const response = await fetch(apiUrl, {
       headers: {
-        'User-Agent': 'GameTribe-Community/1.0 (https://gametribe-backend.onrender.com)',
-        'Accept': 'application/json',
-        'Accept-Language': 'en-US,en;q=0.9'
-      }
+        "User-Agent":
+          "GameTribe-Community/1.0 (https://gametribe-backend.onrender.com)",
+        Accept: "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
     });
 
     if (!response.ok) {
-      console.error('Nominatim API error:', response.status, response.statusText);
+      console.error(
+        "Nominatim API error:",
+        response.status,
+        response.statusText
+      );
       const errorText = await response.text();
-      console.error('Nominatim API error response:', errorText);
-      
+      console.error("Nominatim API error response:", errorText);
+
       // If we get a 403 (blocked), provide a fallback response
       if (response.status === 403) {
-        console.log('Nominatim API blocked, providing fallback suggestions');
+        console.log("Nominatim API blocked, providing fallback suggestions");
         return res.json({
           suggestions: [
             {
-              id: 'fallback-1',
+              id: "fallback-1",
               name: query,
               address: `${query}, Kenya`,
               location: {
                 lat: lat ? parseFloat(lat) : -1.1544312,
-                lng: lng ? parseFloat(lng) : 36.9650841
-              }
-            }
-          ]
+                lng: lng ? parseFloat(lng) : 36.9650841,
+              },
+            },
+          ],
         });
       }
-      
+
       throw new Error(`Nominatim API error: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
 
     if (data && data.length > 0) {
-      let suggestions = data.map(place => ({
+      let suggestions = data.map((place) => ({
         id: place.place_id || place.osm_id,
-        name: place.display_name.split(',')[0] || place.name || 'Unknown',
+        name: place.display_name.split(",")[0] || place.name || "Unknown",
         address: place.display_name,
         location: {
           lat: parseFloat(place.lat),
-          lng: parseFloat(place.lon)
-        }
+          lng: parseFloat(place.lon),
+        },
       }));
 
       // Sort by distance if user location is provided
       if (lat && lng) {
         const userLat = parseFloat(lat);
         const userLng = parseFloat(lng);
-        
+
         // Calculate distance using Haversine formula
         const calculateDistance = (lat1, lon1, lat2, lon2) => {
           const R = 6371; // Earth's radius in kilometers
-          const dLat = (lat2 - lat1) * Math.PI / 180;
-          const dLon = (lon2 - lon1) * Math.PI / 180;
-          const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-                    Math.sin(dLon/2) * Math.sin(dLon/2);
-          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+          const dLat = ((lat2 - lat1) * Math.PI) / 180;
+          const dLon = ((lon2 - lon1) * Math.PI) / 180;
+          const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos((lat1 * Math.PI) / 180) *
+              Math.cos((lat2 * Math.PI) / 180) *
+              Math.sin(dLon / 2) *
+              Math.sin(dLon / 2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
           return R * c; // Distance in kilometers
         };
 
         // Add distance to each suggestion and sort by distance
-        suggestions = suggestions.map(suggestion => ({
-          ...suggestion,
-          distance: calculateDistance(
-            userLat, 
-            userLng, 
-            suggestion.location.lat, 
-            suggestion.location.lng
-          )
-        })).sort((a, b) => a.distance - b.distance);
+        suggestions = suggestions
+          .map((suggestion) => ({
+            ...suggestion,
+            distance: calculateDistance(
+              userLat,
+              userLng,
+              suggestion.location.lat,
+              suggestion.location.lng
+            ),
+          }))
+          .sort((a, b) => a.distance - b.distance);
 
         // Debug: Log sorted suggestions with distances
-        console.log('Sorted suggestions by distance:', suggestions.map(s => ({
-          name: s.name,
-          address: s.address,
-          distance: `${s.distance.toFixed(2)}km`
-        })));
+        console.log(
+          "Sorted suggestions by distance:",
+          suggestions.map((s) => ({
+            name: s.name,
+            address: s.address,
+            distance: `${s.distance.toFixed(2)}km`,
+          }))
+        );
 
         // Remove distance from final response (keep it internal)
-        suggestions = suggestions.map(({ distance, ...suggestion }) => suggestion);
+        suggestions = suggestions.map(
+          ({ distance, ...suggestion }) => suggestion
+        );
       }
 
       res.json({ suggestions });
     } else {
       res.status(400).json({
         error: "No results found",
-        message: "No places found for the given query"
+        message: "No places found for the given query",
       });
     }
   } catch (error) {
     console.error("Nominatim API error:", error);
-    res.status(500).json({ 
-      error: "Failed to search places", 
-      details: error.message 
+    res.status(500).json({
+      error: "Failed to search places",
+      details: error.message,
     });
   }
 });
@@ -345,6 +388,9 @@ app.use((err, req, res, next) => {
   }
   res.status(500).json({ error: "Internal server error" });
 });
+
+// Add file validation error handler
+app.use(handleFileValidationError);
 
 const PORT = 5000;
 app.listen(PORT, () => {

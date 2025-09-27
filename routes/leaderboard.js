@@ -1,97 +1,35 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const {
-  getLeaderboard,
-  getUserRank,
-  getUserPointsHistory,
-  getPointsStats,
-  processPointsForAction,
-} = require("../controllers/points");
-const authenticate = require("../middleware/auth");
+const { 
+  getGlobalLeaderboard, 
+  getCountryLeaderboard, 
+  getUserRank, 
+  getUserPointsHistory, 
+  getPointsStats, 
+  getClanLeaderboard, 
+  clearLeaderboardCache 
+} = require('../controllers/leaderboardController');
+const { validateFirebaseToken } = require('../middleware/tokenManager');
 
-// Get global leaderboard
-router.get("/global", async (req, res) => {
-  try {
-    const { limit = 50, country } = req.query;
-    const leaderboard = await getLeaderboard(parseInt(limit), country);
-    res.status(200).json({ leaderboard });
-  } catch (error) {
-    console.error("Error getting global leaderboard:", error);
-    res.status(500).json({ error: "Failed to fetch leaderboard" });
-  }
-});
+// Get global leaderboard (public)
+router.get('/global', getGlobalLeaderboard);
 
-// Get user's rank
-router.get("/rank", authenticate, async (req, res) => {
-  try {
-    const userId = req.user.uid;
-    const rank = await getUserRank(userId);
-    res.status(200).json({ rank });
-  } catch (error) {
-    console.error("Error getting user rank:", error);
-    res.status(500).json({ error: "Failed to fetch user rank" });
-  }
-});
+// Get country leaderboard (public)
+router.get('/country/:countryCode', getCountryLeaderboard);
 
-// Get user's points history
-router.get("/history", authenticate, async (req, res) => {
-  try {
-    const userId = req.user.uid;
-    const { limit = 20 } = req.query;
-    const history = await getUserPointsHistory(userId, parseInt(limit));
-    res.status(200).json({ history });
-  } catch (error) {
-    console.error("Error getting user points history:", error);
-    res.status(500).json({ error: "Failed to fetch points history" });
-  }
-});
+// Get points statistics (public)
+router.get('/stats', getPointsStats);
 
-// Get points statistics
-router.get("/stats", async (req, res) => {
-  try {
-    const stats = await getPointsStats();
-    res.status(200).json({ stats });
-  } catch (error) {
-    console.error("Error getting points statistics:", error);
-    res.status(500).json({ error: "Failed to fetch statistics" });
-  }
-});
+// Get clan leaderboard (public)
+router.get('/clan/:clanId', getClanLeaderboard);
 
-// Add points for an action (for testing/debugging)
-router.post("/add-points", authenticate, async (req, res) => {
-  try {
-    const userId = req.user.uid;
-    const { action, metadata = {} } = req.body;
-    
-    if (!action) {
-      return res.status(400).json({ error: "Action is required" });
-    }
-    
-    const result = await processPointsForAction(userId, action, metadata);
-    res.status(200).json({ 
-      message: "Points added successfully",
-      result 
-    });
-  } catch (error) {
-    console.error("Error adding points:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
+// Get user's rank (authenticated)
+router.get('/rank', validateFirebaseToken, getUserRank);
 
-// Get country leaderboard
-router.get("/country/:countryCode", async (req, res) => {
-  try {
-    const { countryCode } = req.params;
-    const { limit = 50 } = req.query;
-    const leaderboard = await getLeaderboard(parseInt(limit), countryCode);
-    res.status(200).json({ 
-      leaderboard,
-      country: countryCode 
-    });
-  } catch (error) {
-    console.error("Error getting country leaderboard:", error);
-    res.status(500).json({ error: "Failed to fetch country leaderboard" });
-  }
-});
+// Get user's points history (authenticated)
+router.get('/history', validateFirebaseToken, getUserPointsHistory);
 
-module.exports = router; 
+// Clear leaderboard cache (admin only - add admin middleware)
+router.post('/clear-cache', clearLeaderboardCache);
+
+module.exports = router;

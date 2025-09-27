@@ -10,26 +10,38 @@ const {
 const { v4: uuidv4 } = require("uuid");
 const Stripe = require("stripe");
 const axios = require("axios");
+const crypto = require("crypto");
 require("dotenv").config();
 
 // Initialize Stripe (guarded for missing key in local/dev)
 let stripe = null;
 try {
-  if (process.env.STRIPE_SECRET_KEY && process.env.STRIPE_SECRET_KEY !== 'undefined') {
+  if (
+    process.env.STRIPE_SECRET_KEY &&
+    process.env.STRIPE_SECRET_KEY !== "undefined"
+  ) {
     stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
   } else {
-    console.warn("[Payments] STRIPE_SECRET_KEY not set; Stripe features disabled in this environment.");
+    console.warn(
+      "[Payments] STRIPE_SECRET_KEY not set; Stripe features disabled in this environment."
+    );
   }
 } catch (e) {
   console.error("[Payments] Failed to initialize Stripe:", e.message);
   stripe = null;
 }
 
-// M-Pesa credentials
-const MPESA_CONSUMER_KEY = process.env.MPESA_CONSUMER_KEY;
-const MPESA_CONSUMER_SECRET = process.env.MPESA_CONSUMER_SECRET;
-const MPESA_SHORTCODE = process.env.MPESA_SHORTCODE;
-const MPESA_PASSKEY = process.env.MPESA_PASSKEY;
+// Import M-Pesa configuration utility
+const { getMpesaConfig } = require("../utils/mpesaConfig");
+
+// Get M-Pesa configuration
+let mpesaConfig = null;
+try {
+  mpesaConfig = getMpesaConfig();
+} catch (error) {
+  console.warn("[Payments] M-Pesa configuration not available:", error.message);
+}
+
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
 // Sanitize input
@@ -55,7 +67,7 @@ const updateWithRetry = async (ref, data, retries = 3) => {
   }
 };
 
-// Get Stripe transaction status (polled by frontend as fallback)
+// Get transaction status (polled by frontend as fallback) - works for both Stripe and M-Pesa
 const getStripeTransactionStatus = async (req, res) => {
   try {
     const { transactionId } = req.params;
@@ -74,9 +86,10 @@ const getStripeTransactionStatus = async (req, res) => {
       status: tx.status || "pending",
       error: tx.error || null,
       pointsToAdd: tx.pointsToAdd || tx.amount || 0,
+      method: tx.method || "unknown",
     });
   } catch (error) {
-    console.error("Error getting Stripe transaction status:", {
+    console.error("Error getting transaction status:", {
       message: error.message,
       stack: error.stack,
     });
@@ -87,11 +100,21 @@ const getStripeTransactionStatus = async (req, res) => {
 // Generate M-Pesa OAuth token
 const getMpesaToken = async () => {
   try {
+    if (!mpesaConfig) {
+      throw new Error("M-Pesa configuration not available");
+    }
+
     const auth = Buffer.from(
-      `${MPESA_CONSUMER_KEY}:${MPESA_CONSUMER_SECRET}`
+      `${mpesaConfig.consumerKey}:${mpesaConfig.consumerSecret}`
     ).toString("base64");
+
+    const baseUrl =
+      mpesaConfig.environment === "production"
+        ? "https://api.safaricom.co.ke"
+        : "https://sandbox.safaricom.co.ke";
+
     const response = await axios.get(
-      "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
+      `${baseUrl}/oauth/v1/generate?grant_type=client_credentials`,
       { headers: { Authorization: `Basic ${auth}` } }
     );
     return response.data.access_token;
@@ -110,52 +133,79 @@ const createStripePayment = async (req, res) => {
     if (!stripe) {
       return res.status(503).json({ error: "Stripe not configured" });
     }
+
+    // Validate and sanitize input
     const { amount, userId, currency = "kes" } = req.body;
+    const sanitizedAmount = parseInt(sanitizeInput(amount));
+    const sanitizedUserId = sanitizeInput(userId);
+    const sanitizedCurrency = sanitizeInput(currency).toLowerCase();
+
     if (
-      !amount ||
-      amount < 100 ||
-      amount > 10000 ||
-      !Number.isInteger(amount)
+      !sanitizedAmount ||
+      sanitizedAmount < 1 ||
+      sanitizedAmount > 10000 ||
+      !Number.isInteger(sanitizedAmount)
     ) {
       return res.status(400).json({
-        error: "Amount must be an integer between 100 and 10,000",
+        error: "Amount must be an integer between 1 and 10,000",
       });
     }
-    if (!userId || typeof userId !== "string") {
+    if (
+      !sanitizedUserId ||
+      typeof sanitizedUserId !== "string" ||
+      sanitizedUserId.length < 10
+    ) {
       return res.status(400).json({ error: "Valid User ID is required" });
     }
 
-    const userRef = ref(database, `users/${userId}`);
+    // Validate currency
+    const allowedCurrencies = ["kes", "usd", "eur"];
+    if (!allowedCurrencies.includes(sanitizedCurrency)) {
+      return res.status(400).json({ error: "Invalid currency" });
+    }
+
+    // Validate user is authenticated and matches the requesting user
+    if (req.user?.uid !== sanitizedUserId) {
+      return res.status(403).json({ error: "Unauthorized: User ID mismatch" });
+    }
+
+    const userRef = ref(database, `users/${sanitizedUserId}`);
     const paymentUserSnapshot = await get(userRef);
     if (!paymentUserSnapshot.exists()) {
       return res.status(404).json({ error: "User not found" });
     }
 
     const transactionId = uuidv4();
-    const pointsToAdd = parseInt(amount); // 1 unit = 1 point, regardless of currency
-    const stripeAmount =
-      currency.toLowerCase() === "kes" ? amount * 100 : amount * 100; // Adjust for Stripe (cents)
+    const pointsToAdd = sanitizedAmount; // 1 unit = 1 point, regardless of currency
+    const stripeAmount = sanitizedAmount * 100; // Adjust for Stripe (cents)
+
     const paymentIntent = await stripe.paymentIntents.create({
       amount: stripeAmount,
-      currency: currency.toLowerCase(),
+      currency: sanitizedCurrency,
       payment_method_types: ["card"],
-      metadata: { userId, transactionId, pointsToAdd: pointsToAdd.toString() },
+      metadata: {
+        userId: sanitizedUserId,
+        transactionId,
+        pointsToAdd: pointsToAdd.toString(),
+        originalAmount: sanitizedAmount.toString(),
+        ipAddress: req.ip || "unknown",
+      },
     });
 
     await updateWithRetry(ref(database, `transactions/${transactionId}`), {
       id: transactionId,
-      userId,
+      userId: sanitizedUserId,
       type: "deposit",
       method: "stripe",
-      amount,
-      currency: currency.toUpperCase(),
+      amount: sanitizedAmount,
+      currency: sanitizedCurrency.toUpperCase(),
       status: "pending",
       paymentIntentId: paymentIntent.id,
       pointsToAdd,
+      ipAddress: req.ip || "unknown",
+      userAgent: req.get("User-Agent") || "unknown",
       createdAt: new Date().toISOString(),
     });
-
-
 
     return res.status(200).json({
       clientSecret: paymentIntent.client_secret,
@@ -178,51 +228,89 @@ const createStripePayment = async (req, res) => {
 // Create M-Pesa STK Push payment
 const createMpesaPayment = async (req, res) => {
   try {
+    if (!mpesaConfig) {
+      return res.status(503).json({ error: "M-Pesa not configured" });
+    }
+
+    // Validate and sanitize input
     const { amount, phoneNumber, userId, currency = "KES" } = req.body;
-    if (!amount || amount < 1 || amount > 10000 || !Number.isInteger(amount)) {
+    const sanitizedAmount = parseInt(sanitizeInput(amount));
+    const sanitizedPhoneNumber = sanitizeInput(phoneNumber);
+    const sanitizedUserId = sanitizeInput(userId);
+    const sanitizedCurrency = sanitizeInput(currency).toUpperCase();
+
+    if (
+      !sanitizedAmount ||
+      sanitizedAmount < 1 ||
+      sanitizedAmount > 10000 ||
+      !Number.isInteger(sanitizedAmount)
+    ) {
       return res.status(400).json({
-        error: "Amount must be an integer between 10 and 10,000",
+        error: "Amount must be an integer between 1 and 10,000",
       });
     }
-    if (!phoneNumber || !phoneNumber.match(/^\+254[0-9]{9}$/)) {
+    if (
+      !sanitizedPhoneNumber ||
+      !sanitizedPhoneNumber.match(/^\+254[0-9]{9}$/)
+    ) {
       return res.status(400).json({
         error: "Valid phone number is required (e.g., +254712345678)",
       });
     }
-    if (!userId || typeof userId !== "string") {
+    if (
+      !sanitizedUserId ||
+      typeof sanitizedUserId !== "string" ||
+      sanitizedUserId.length < 10
+    ) {
       return res.status(400).json({ error: "Valid User ID is required" });
     }
 
-    const userRef = ref(database, `users/${userId}`);
+    // Validate user is authenticated and matches the requesting user
+    if (req.user?.uid !== sanitizedUserId) {
+      return res.status(403).json({ error: "Unauthorized: User ID mismatch" });
+    }
+
+    // Validate currency for M-Pesa (only KES supported)
+    if (sanitizedCurrency !== "KES") {
+      return res
+        .status(400)
+        .json({ error: "M-Pesa only supports KES currency" });
+    }
+
+    const userRef = ref(database, `users/${sanitizedUserId}`);
     const mpesaUserSnapshot = await get(userRef);
     if (!mpesaUserSnapshot.exists()) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const pointsToAdd = parseInt(amount); // 1 unit = 1 point, regardless of currency
+    const pointsToAdd = sanitizedAmount; // 1 unit = 1 point, regardless of currency
     const token = await getMpesaToken();
     const timestamp = new Date()
       .toISOString()
       .replace(/[^0-9]/g, "")
       .slice(0, 14);
     const password = Buffer.from(
-      `${MPESA_SHORTCODE}${MPESA_PASSKEY}${timestamp}`
+      `${mpesaConfig.shortcode}${mpesaConfig.passkey}${timestamp}`
     ).toString("base64");
 
+    const baseUrl =
+      mpesaConfig.environment === "production"
+        ? "https://api.safaricom.co.ke"
+        : "https://sandbox.safaricom.co.ke";
+
     const response = await axios.post(
-      "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
+      `${baseUrl}/mpesa/stkpush/v1/processrequest`,
       {
-        BusinessShortCode: MPESA_SHORTCODE,
+        BusinessShortCode: mpesaConfig.shortcode,
         Password: password,
         Timestamp: timestamp,
         TransactionType: "CustomerPayBillOnline",
-        Amount: amount,
-        PartyA: phoneNumber.replace("+", ""),
-        PartyB: MPESA_SHORTCODE,
-        PhoneNumber: phoneNumber.replace("+", ""),
-        CallBackURL: "https://gametribe-backend.onrender.com/api/payments/mpesa/webhook",
-        // CallBackURL: process.env.MPESA_CALLBACK_URL,
-        AccountReference: `GameTribe_${userId}`,
+        Amount: sanitizedAmount,
+        PartyA: sanitizedPhoneNumber.replace("+", ""),
+        PartyB: mpesaConfig.shortcode,
+        PhoneNumber: sanitizedPhoneNumber.replace("+", ""),
+        CallBackURL: mpesaConfig.callbackUrl,
+        AccountReference: `GameTribe_${sanitizedUserId}`,
         TransactionDesc: "Deposit to GameTribe Wallet",
       },
       { headers: { Authorization: `Bearer ${token}` } }
@@ -231,18 +319,19 @@ const createMpesaPayment = async (req, res) => {
     const transactionId = uuidv4();
     await updateWithRetry(ref(database, `transactions/${transactionId}`), {
       id: transactionId,
-      userId,
+      userId: sanitizedUserId,
       type: "deposit",
       method: "mpesa",
-      amount,
-      currency: currency.toUpperCase(),
+      amount: sanitizedAmount,
+      currency: sanitizedCurrency,
       status: "pending",
       checkoutRequestId: response.data.CheckoutRequestID,
       pointsToAdd,
+      phoneNumber: sanitizedPhoneNumber,
+      ipAddress: req.ip || "unknown",
+      userAgent: req.get("User-Agent") || "unknown",
       createdAt: new Date().toISOString(),
     });
-
-
 
     return res.status(200).json({
       transactionId,
@@ -264,8 +353,6 @@ const createMpesaPayment = async (req, res) => {
 
 // Stripe webhook handler
 const stripeWebhook = async (req, res) => {
-  
-
   if (!stripe || !webhookSecret) {
     console.error("Stripe webhook secret is not defined");
     await updateWithRetry(ref(database, `webhook_errors/stripe_${uuidv4()}`), {
@@ -280,11 +367,9 @@ const stripeWebhook = async (req, res) => {
   try {
     const event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
 
-
     const eventRef = ref(database, `webhook_events/stripe_${event.id}`);
     const eventSnapshot = await get(eventRef);
     if (eventSnapshot.exists()) {
-
       return res.status(200).json({ received: true });
     }
 
@@ -347,7 +432,6 @@ const stripeWebhook = async (req, res) => {
 
         const transaction = transactionSnapshot.val();
         if (transaction.status === "completed") {
-    
           return res.status(200).json({ received: true });
         }
 
@@ -359,9 +443,22 @@ const stripeWebhook = async (req, res) => {
         const userRef = ref(database, `users/${userId}`);
         const userSnapshot = await get(userRef);
         if (userSnapshot.exists()) {
-          const currentPoints = userSnapshot.val().points || 0;
+          const userData = userSnapshot.val();
+          const currentPoints = userData.points || 0;
+          const currentWallet = userData.wallet || {
+            amount: 0,
+            currency: "KES",
+          };
+
+          // Update user points and wallet balance
           await updateWithRetry(userRef, {
             points: currentPoints + points,
+            wallet: {
+              ...currentWallet,
+              amount: (currentWallet.amount || 0) + points, // Also add to wallet balance
+              currency: "KES",
+              lastUpdated: new Date().toISOString(),
+            },
             updatedAt: new Date().toISOString(),
           });
 
@@ -373,13 +470,19 @@ const stripeWebhook = async (req, res) => {
               id: historyId,
               points: points,
               reason: "DEPOSIT_STRIPE",
-              metadata: { transactionId, paymentIntentId: paymentIntent.id },
+              metadata: {
+                transactionId,
+                paymentIntentId: paymentIntent.id,
+                amount: transaction.amount,
+                currency: transaction.currency,
+              },
               timestamp: new Date().toISOString(),
               previousPoints: currentPoints,
               newPoints: currentPoints + points,
+              previousWalletAmount: currentWallet.amount || 0,
+              newWalletAmount: (currentWallet.amount || 0) + points,
             }
           );
-
         } else {
           console.error(`User ${userId} not found`);
           await updateWithRetry(
@@ -404,7 +507,6 @@ const stripeWebhook = async (req, res) => {
         const subscriptionId = subscription.id;
         const customerId = subscription.customer;
 
-
         const subscriptionUserQuery = ref(database, "users");
         const subscriptionUserSnapshot = await get(
           query(
@@ -420,12 +522,10 @@ const stripeWebhook = async (req, res) => {
             subscriptionStatus,
             updatedAt: new Date().toISOString(),
           });
-  
         }
         break;
 
       default:
-  
     }
 
     return res.status(200).json({ received: true });
@@ -441,6 +541,30 @@ const stripeWebhook = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
     return res.status(400).json({ error: "Webhook error" });
+  }
+};
+
+// M-Pesa webhook signature verification
+const verifyMpesaWebhookSignature = (req, res, next) => {
+  try {
+    const signature = req.headers["x-mpesa-signature"];
+    const timestamp = req.headers["x-mpesa-timestamp"];
+
+    if (!signature || !timestamp) {
+      console.warn("Missing M-Pesa webhook signature or timestamp");
+      // For now, allow without signature verification but log the warning
+      // In production, you should implement proper signature verification
+      return next();
+    }
+
+    // TODO: Implement proper M-Pesa signature verification
+    // This would involve creating a hash of the payload with your secret
+    // and comparing it with the provided signature
+
+    next();
+  } catch (error) {
+    console.error("M-Pesa webhook signature verification error:", error);
+    return res.status(400).json({ error: "Invalid webhook signature" });
   }
 };
 
@@ -460,16 +584,16 @@ const mpesaWebhook = async (req, res) => {
     }
 
     const { stkCallback } = Body;
-    const { CheckoutRequestID: requestId, ResultCode, ResultDesc } = stkCallback;
+    const {
+      CheckoutRequestID: requestId,
+      ResultCode,
+      ResultDesc,
+    } = stkCallback;
     CheckoutRequestID = requestId; // Assign to outer scope variable
 
-    const eventRef = ref(
-      database,
-      `webhook_events/mpesa_${CheckoutRequestID}`
-    );
+    const eventRef = ref(database, `webhook_events/mpesa_${CheckoutRequestID}`);
     const eventSnapshot = await get(eventRef);
     if (eventSnapshot.exists()) {
-  
       return res.status(200).json({ received: true });
     }
 
@@ -477,11 +601,11 @@ const mpesaWebhook = async (req, res) => {
     const transactionsRef = ref(database, "transactions");
     const transactionSnapshot = await get(transactionsRef);
     const allTransactions = transactionSnapshot.val() || {};
-    
+
     // Find transaction with matching checkoutRequestId
     let transactionId = null;
     let transaction = null;
-    
+
     for (const [id, tx] of Object.entries(allTransactions)) {
       if (tx.checkoutRequestId === CheckoutRequestID) {
         transactionId = id;
@@ -489,7 +613,7 @@ const mpesaWebhook = async (req, res) => {
         break;
       }
     }
-    
+
     if (!transaction) {
       console.error(
         `Transaction with CheckoutRequestID ${CheckoutRequestID} not found`
@@ -518,7 +642,9 @@ const mpesaWebhook = async (req, res) => {
       const userRef = ref(database, `users/${transaction.userId}`);
       const userSnapshot = await get(userRef);
       if (userSnapshot.exists()) {
-        const currentPoints = userSnapshot.val().points || 0;
+        const userData = userSnapshot.val();
+        const currentPoints = userData.points || 0;
+        const currentWallet = userData.wallet || { amount: 0, currency: "KES" };
         const pointsToAdd =
           parseInt(transaction.pointsToAdd) || parseInt(transaction.amount);
         if (isNaN(pointsToAdd) || pointsToAdd <= 0) {
@@ -538,8 +664,16 @@ const mpesaWebhook = async (req, res) => {
           );
           return res.status(400).json({ error: "Invalid pointsToAdd" });
         }
+
+        // Update user points and wallet balance
         await updateWithRetry(userRef, {
           points: currentPoints + pointsToAdd,
+          wallet: {
+            ...currentWallet,
+            amount: (currentWallet.amount || 0) + pointsToAdd, // Also add to wallet balance
+            currency: "KES",
+            lastUpdated: new Date().toISOString(),
+          },
           updatedAt: new Date().toISOString(),
         });
 
@@ -551,13 +685,19 @@ const mpesaWebhook = async (req, res) => {
             id: historyId,
             points: pointsToAdd,
             reason: "DEPOSIT_MPESA",
-            metadata: { checkoutRequestId: CheckoutRequestID, transactionId },
+            metadata: {
+              checkoutRequestId: CheckoutRequestID,
+              transactionId,
+              amount: transaction.amount,
+              currency: transaction.currency,
+            },
             timestamp: new Date().toISOString(),
             previousPoints: currentPoints,
             newPoints: currentPoints + pointsToAdd,
+            previousWalletAmount: currentWallet.amount || 0,
+            newWalletAmount: (currentWallet.amount || 0) + pointsToAdd,
           }
         );
-
       } else {
         console.error(`User ${transaction.userId} not found`);
         await updateWithRetry(
@@ -578,7 +718,6 @@ const mpesaWebhook = async (req, res) => {
         error: ResultDesc,
         updatedAt: new Date().toISOString(),
       });
-
     }
 
     return res.status(200).json({ received: true });
@@ -640,8 +779,6 @@ const convertWalletToPoints = async (req, res) => {
       updatedAt: new Date().toISOString(),
     });
 
-
-
     return res.status(200).json({
       message: `Converted ${amount} ${currency} to ${pointsToAdd} points`,
     });
@@ -667,8 +804,6 @@ const getUserTransactions = async (req, res) => {
     const userId = req.user.uid;
     const { limit = 10, type } = req.query;
 
-
-
     if (!userId) {
       return res.status(400).json({ error: "User ID is required" });
     }
@@ -676,31 +811,30 @@ const getUserTransactions = async (req, res) => {
     // Get all transactions and filter on the server side for simplicity
     const transactionsRef = ref(database, "transactions");
     const transactionSnapshot = await get(transactionsRef);
-    
+
     if (!transactionSnapshot.exists()) {
       return res.status(200).json({ transactions: [] });
     }
-    
+
     const transactionsData = transactionSnapshot.val() || {};
-    
+
     // Convert to array and filter by userId and type
     let transactions = Object.entries(transactionsData)
       .map(([id, tx]) => ({ id, ...tx }))
-      .filter(tx => tx.userId === userId);
-    
+      .filter((tx) => tx.userId === userId);
+
     if (type) {
-      transactions = transactions.filter(tx => tx.type === type);
+      transactions = transactions.filter((tx) => tx.type === type);
     }
-    
+
     // Sort by creation date (newest first) and limit results
     transactions = transactions
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
       .slice(0, parseInt(limit))
-      .map(tx => ({
+      .map((tx) => ({
         ...tx,
         pointsToAdd: tx.pointsToAdd || tx.amount || 0,
       }));
-
 
     return res.status(200).json({ transactions });
   } catch (error) {
@@ -717,6 +851,7 @@ module.exports = {
   createMpesaPayment,
   stripeWebhook,
   mpesaWebhook,
+  verifyMpesaWebhookSignature,
   convertWalletToPoints,
   getUserTransactions,
   getStripeTransactionStatus,
