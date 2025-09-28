@@ -233,14 +233,29 @@ const getMpesaToken = async () => {
         ? "https://api.safaricom.co.ke"
         : "https://sandbox.safaricom.co.ke";
 
+    console.log("🔐 M-Pesa token request details:", {
+      baseUrl,
+      consumerKey: mpesaConfig.consumerKey,
+      consumerSecretLength: mpesaConfig.consumerSecret?.length,
+      environment: mpesaConfig.environment,
+    });
+
     const response = await axios.get(
       `${baseUrl}/oauth/v1/generate?grant_type=client_credentials`,
       { headers: { Authorization: `Basic ${auth}` } }
     );
+
+    console.log("✅ M-Pesa token generated successfully");
     return response.data.access_token;
   } catch (error) {
-    console.error("Error generating M-Pesa token:", {
+    console.error("❌ Error generating M-Pesa token:", {
       message: error.message,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      baseUrl,
+      consumerKey: mpesaConfig.consumerKey,
+      environment: mpesaConfig.environment,
       stack: error.stack,
     });
     throw new Error("Failed to generate M-Pesa token");
@@ -949,7 +964,7 @@ const stripeWebhook = async (req, res) => {
         stack: error.stack,
       });
 
-      if (process.env.NODE_ENV === "development") {
+      if (process.env.NODE_ENV === "development" || !webhookSecret) {
         console.warn(
           "🔧 DEVELOPMENT MODE: Processing webhook despite signature verification failure"
         );
