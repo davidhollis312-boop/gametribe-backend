@@ -5,6 +5,17 @@ const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 
+// Import new performance modules
+const {
+  devLimiter,
+  generalLimiter,
+  authLimiter,
+  paymentLimiter,
+  uploadLimiter,
+  searchLimiter,
+  webhookLimiter,
+} = require("./middleware/rateLimiter");
+
 // Import new middleware
 const { sanitizeContent } = require("./middleware/contentSanitizer");
 const {
@@ -86,41 +97,65 @@ app.use(
   })
 );
 
+// Apply general rate limiting (devLimiter for development - 5000 requests per 15 minutes)
+app.use(devLimiter);
+
 // Define Stripe webhook route FIRST with raw parser
 // Stripe webhook route FIRST
 app.post(
   "/api/payments/stripe/webhook",
+  webhookLimiter,
   express.raw({ type: "application/json" }),
   (req, res, next) => {
+    console.log("🚀 Stripe webhook route hit");
+    console.log("📋 Request headers:", req.headers);
+    console.log("📦 Body type:", typeof req.body);
+    console.log("📦 Body length:", req.body?.length || 0);
+    console.log(
+      "📦 Body hex preview:",
+      req.body?.toString("hex").substring(0, 200) + "..."
+    );
     next();
   },
   stripeWebhook
 );
 
+// Test webhook endpoint
+app.post("/api/payments/stripe/test-webhook", (req, res) => {
+  console.log("🧪 Test webhook endpoint hit");
+  console.log("📋 Headers:", req.headers);
+  console.log("📦 Body:", req.body);
+  res.json({
+    message: "Test webhook received",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Apply global middleware AFTER webhook
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Mount routes
+// Mount routes with rate limiting
 app.use("/api/posts", postsRouter);
 app.use("/api/clans", clansRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/events", eventsRouter);
-app.use("/api/payments", paymentRouter);
+app.use("/api/payments", paymentLimiter, paymentRouter);
 app.use("/api/leaderboard", leaderboardRouter);
 app.use("/api/contact", contactRouter);
 
-// ✅ NEW: Mount production-grade routes
+// ✅ NEW: Mount production-grade routes with rate limiting
 app.use("/api/analytics", analyticsRouter);
-app.use("/api/search", searchRouter);
+app.use("/api/search", searchLimiter, searchRouter);
 app.use("/api/game-scores", gameScoresRouter);
 
-// Add auth route for cross-platform authentication
-app.use("/api/auth", require("./routes/auth"));
+// Add auth route for cross-platform authentication with rate limiting
+app.use("/api/auth", authLimiter, require("./routes/auth"));
 
 // Open Graph unfurl endpoint using proper scraper with new middleware
 app.get(
   "/api/og",
+  searchLimiter,
   rateLimitOgRequests,
   validateUrlMiddleware,
   async (req, res) => {
@@ -179,7 +214,7 @@ app.get(
 );
 
 // OpenStreetMap Nominatim API endpoint (Free alternative to Google Places)
-app.get("/api/places/search", async (req, res) => {
+app.get("/api/places/search", searchLimiter, async (req, res) => {
   try {
     const { query, lat, lng } = req.query;
     const clientIP = req.ip || req.connection.remoteAddress || "unknown";
@@ -392,7 +427,21 @@ app.use((err, req, res, next) => {
 // Add file validation error handler
 app.use(handleFileValidationError);
 
-const PORT = 5000;
-app.listen(PORT, () => {
-  // Server started successfully
-});
+const PORT = process.env.PORT || 5000;
+
+// Start server
+const startServer = async () => {
+  try {
+    // Start server
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`🗄️ Database: Firebase (default)`);
+      console.log(`💾 Cache: In-memory (efficient)`);
+    });
+  } catch (error) {
+    console.error("❌ Failed to start server:", error);
+    process.exit(1);
+  }
+};
+
+startServer();

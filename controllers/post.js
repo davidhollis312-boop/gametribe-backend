@@ -5,6 +5,7 @@ const { JSDOM } = require("jsdom");
 const window = new JSDOM("").window;
 const purify = DOMPurify(window);
 const { processPointsForAction } = require("./points");
+const { cache, cacheKeys, CACHE_TTL } = require("../utils/cache");
 
 // ✅ NEW: Import production-grade services
 const cacheService = require("../services/cache");
@@ -146,12 +147,12 @@ const getPosts = async (req, res) => {
     let cachedPosts = null;
     if (category !== "clan") {
       cachedPosts = await cacheService.getPosts(
-      pageNum,
-      limitNum,
-      category,
+        pageNum,
+        limitNum,
+        category,
         authorId,
         clanId
-    );
+      );
     }
 
     if (cachedPosts) {
@@ -292,14 +293,14 @@ const getPosts = async (req, res) => {
 
     // ✅ NEW: Cache the results (skip for clan posts to debug)
     if (category !== "clan") {
-    await cacheService.setPosts(
-      response,
-      pageNum,
-      limitNum,
-      category,
+      await cacheService.setPosts(
+        response,
+        pageNum,
+        limitNum,
+        category,
         authorId,
         clanId
-    );
+      );
     }
 
     // ✅ NEW: Track metrics
@@ -680,15 +681,15 @@ const createPost = async (req, res) => {
             "⚠️ Trimming failed, uploading original video:",
             trimErr?.message || trimErr
           );
-      const uploaded = await storage.uploadFile(file, fileName);
-      if (uploaded && uploaded.url) {
-        imageUrl = uploaded.url;
-      } else if (uploaded && typeof uploaded.getSignedUrl === "function") {
-        const [signedUrl] = await uploaded.getSignedUrl({
-          action: "read",
-          expires: "03-09-2491",
-        });
-        imageUrl = signedUrl;
+          const uploaded = await storage.uploadFile(file, fileName);
+          if (uploaded && uploaded.url) {
+            imageUrl = uploaded.url;
+          } else if (uploaded && typeof uploaded.getSignedUrl === "function") {
+            const [signedUrl] = await uploaded.getSignedUrl({
+              action: "read",
+              expires: "03-09-2491",
+            });
+            imageUrl = signedUrl;
           }
         }
       } else {

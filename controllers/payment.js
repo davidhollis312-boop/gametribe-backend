@@ -43,6 +43,13 @@ try {
 }
 
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+console.log("🔐 Webhook secret status:", {
+  hasWebhookSecret: !!webhookSecret,
+  webhookSecretLength: webhookSecret?.length || 0,
+  webhookSecretPreview: webhookSecret
+    ? `${webhookSecret.substring(0, 10)}...`
+    : "undefined",
+});
 
 // Sanitize input
 const sanitizeInput = (input) => {
@@ -54,12 +61,20 @@ const sanitizeInput = (input) => {
 const updateWithRetry = async (ref, data, retries = 3) => {
   for (let i = 0; i < retries; i++) {
     try {
+      // Add debugging for Firebase ref issues
+      if (!ref || !ref._path) {
+        console.error("Invalid Firebase ref:", { ref, type: typeof ref });
+        throw new Error("Invalid Firebase ref provided");
+      }
+
       await update(ref, data);
       return;
     } catch (error) {
       console.error(`Retry ${i + 1} failed for update:`, {
         message: error.message,
         stack: error.stack,
+        refPath: ref?._path?.toString(),
+        dataKeys: data ? Object.keys(data) : "no data",
       });
       if (i === retries - 1) throw error;
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -82,6 +97,111 @@ const getStripeTransactionStatus = async (req, res) => {
     }
 
     const tx = snapshot.val();
+
+    // Check if this is a completed M-Pesa transaction that hasn't been processed yet
+    if (
+      tx.status === "completed" &&
+      tx.method === "mpesa" &&
+      tx.checkoutRequestId
+    ) {
+      console.log(
+        "🔄 Found completed M-Pesa transaction, checking if user was updated:",
+        transactionId
+      );
+
+      // Check if this transaction was already processed by webhook
+      const eventRef = ref(
+        database,
+        `webhook_events/mpesa_${tx.checkoutRequestId}`
+      );
+      const eventSnapshot = await get(eventRef);
+
+      if (!eventSnapshot.exists()) {
+        console.log(
+          "⚠️ M-Pesa webhook never processed this transaction, processing now:",
+          transactionId
+        );
+
+        // Process the M-Pesa payment completion (fallback for failed webhook)
+        const userRef = ref(database, `users/${tx.userId}`);
+        const userSnapshot = await get(userRef);
+
+        if (userSnapshot.exists()) {
+          const userData = userSnapshot.val();
+          const currentPoints = userData.points || 0;
+          const currentWallet = userData.wallet || {
+            amount: 0,
+            currency: "KES",
+          };
+          const pointsToAdd = parseInt(tx.pointsToAdd) || parseInt(tx.amount);
+
+          if (!isNaN(pointsToAdd) && pointsToAdd > 0) {
+            console.log("🔄 Processing M-Pesa fallback payment completion:", {
+              transactionId,
+              userId: tx.userId,
+              currentPoints,
+              currentWalletAmount: currentWallet.amount || 0,
+              pointsToAdd,
+              newPoints: currentPoints + pointsToAdd,
+              newWalletAmount: (currentWallet.amount || 0) + pointsToAdd,
+            });
+
+            // Update user points and wallet
+            await updateWithRetry(userRef, {
+              points: currentPoints + pointsToAdd,
+              wallet: {
+                amount: (currentWallet.amount || 0) + pointsToAdd,
+                currency: "KES",
+                lastUpdated: new Date().toISOString(),
+              },
+              updatedAt: new Date().toISOString(),
+            });
+
+            console.log(
+              "✅ M-Pesa fallback: Successfully updated user points and wallet"
+            );
+
+            // Mark webhook event as processed to prevent duplicate processing
+            await updateWithRetry(eventRef, {
+              processed: true,
+              type: "stkCallback_fallback",
+              transactionId,
+              createdAt: new Date().toISOString(),
+            });
+
+            // Record points history entry
+            const historyId = `deposit_mpesa_${transactionId}`;
+            await updateWithRetry(
+              ref(database, `pointsHistory/${tx.userId}/${historyId}`),
+              {
+                id: historyId,
+                points: pointsToAdd,
+                reason: "DEPOSIT_MPESA_FALLBACK",
+                metadata: {
+                  checkoutRequestId: tx.checkoutRequestId,
+                  transactionId,
+                  amount: tx.amount,
+                  currency: tx.currency,
+                },
+                timestamp: new Date().toISOString(),
+                previousPoints: currentPoints,
+                newPoints: currentPoints + pointsToAdd,
+                previousWalletAmount: currentWallet.amount || 0,
+                newWalletAmount: (currentWallet.amount || 0) + pointsToAdd,
+              }
+            );
+
+            console.log("✅ M-Pesa fallback: Payment processing completed");
+          }
+        }
+      } else {
+        console.log(
+          "✅ M-Pesa webhook already processed this transaction:",
+          transactionId
+        );
+      }
+    }
+
     return res.status(200).json({
       status: tx.status || "pending",
       error: tx.error || null,
@@ -140,14 +260,25 @@ const createStripePayment = async (req, res) => {
     const sanitizedUserId = sanitizeInput(userId);
     const sanitizedCurrency = sanitizeInput(currency).toLowerCase();
 
+    // Stripe minimum amount validation
+    const minimumAmounts = {
+      kes: 50, // KES 50 ≈ $0.50 (minimum for Stripe)
+      usd: 50, // $0.50
+      eur: 50, // €0.50
+    };
+
     if (
       !sanitizedAmount ||
-      sanitizedAmount < 1 ||
+      sanitizedAmount < minimumAmounts[sanitizedCurrency] ||
       sanitizedAmount > 10000 ||
       !Number.isInteger(sanitizedAmount)
     ) {
       return res.status(400).json({
-        error: "Amount must be an integer between 1 and 10,000",
+        error: `Amount must be an integer between ${
+          minimumAmounts[sanitizedCurrency]
+        } and 10,000 ${sanitizedCurrency.toUpperCase()}`,
+        minimumAmount: minimumAmounts[sanitizedCurrency],
+        currency: sanitizedCurrency.toUpperCase(),
       });
     }
     if (
@@ -177,17 +308,36 @@ const createStripePayment = async (req, res) => {
 
     const transactionId = uuidv4();
     const pointsToAdd = sanitizedAmount; // 1 unit = 1 point, regardless of currency
-    const stripeAmount = sanitizedAmount * 100; // Adjust for Stripe (cents)
+
+    // Convert to USD for Stripe (Stripe requires USD for international payments)
+    // Approximate conversion rates (you might want to use a real-time API)
+    const conversionRates = {
+      kes: 0.0065, // 1 KES ≈ $0.0065
+      usd: 1.0,
+      eur: 1.1, // 1 EUR ≈ $1.1
+    };
+
+    const usdAmount = Math.round(
+      sanitizedAmount * conversionRates[sanitizedCurrency] * 100
+    ); // Convert to cents
+    const stripeAmount = Math.max(usdAmount, 50); // Ensure minimum $0.50
+
+    console.log(
+      `Stripe payment: ${sanitizedAmount} ${sanitizedCurrency.toUpperCase()} → $${(
+        stripeAmount / 100
+      ).toFixed(2)} USD`
+    );
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: stripeAmount,
-      currency: sanitizedCurrency,
+      currency: "usd", // Always use USD for Stripe
       payment_method_types: ["card"],
       metadata: {
         userId: sanitizedUserId,
         transactionId,
         pointsToAdd: pointsToAdd.toString(),
         originalAmount: sanitizedAmount.toString(),
+        originalCurrency: sanitizedCurrency.toUpperCase(),
         ipAddress: req.ip || "unknown",
       },
     });
@@ -199,6 +349,8 @@ const createStripePayment = async (req, res) => {
       method: "stripe",
       amount: sanitizedAmount,
       currency: sanitizedCurrency.toUpperCase(),
+      stripeAmount: stripeAmount,
+      stripeCurrency: "USD",
       status: "pending",
       paymentIntentId: paymentIntent.id,
       pointsToAdd,
@@ -351,48 +503,42 @@ const createMpesaPayment = async (req, res) => {
   }
 };
 
-// Stripe webhook handler
-const stripeWebhook = async (req, res) => {
-  if (!stripe || !webhookSecret) {
-    console.error("Stripe webhook secret is not defined");
-    await updateWithRetry(ref(database, `webhook_errors/stripe_${uuidv4()}`), {
-      error: "Webhook secret not defined",
-      timestamp: new Date().toISOString(),
-    });
-    return res.status(500).json({ error: "Webhook configuration error" });
-  }
-
-  const sig = req.headers["stripe-signature"];
-
+// Process Stripe event (used for both normal and test mode)
+const processStripeEvent = async (event, res) => {
   try {
-    const event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    console.log("🎯 Processing Stripe event:", event.type);
 
     const eventRef = ref(database, `webhook_events/stripe_${event.id}`);
     const eventSnapshot = await get(eventRef);
     if (eventSnapshot.exists()) {
+      console.log("✅ Event already processed, skipping");
       return res.status(200).json({ received: true });
     }
 
-    await updateWithRetry(eventRef, {
-      processed: true,
-      type: event.type,
-      createdAt: new Date().toISOString(),
-    });
-
     switch (event.type) {
-      case "payment_intent.succeeded":
-        const paymentIntent = event.data.object;
-        const { transactionId, userId, pointsToAdd } = paymentIntent.metadata;
+      case "checkout.session.completed":
+        console.log("🎉 Processing checkout.session.completed event");
+        const checkoutSession = event.data.object;
+        console.log("🛒 Checkout session data:", {
+          id: checkoutSession.id,
+          payment_status: checkoutSession.payment_status,
+          amount_total: checkoutSession.amount_total,
+          currency: checkoutSession.currency,
+          metadata: checkoutSession.metadata,
+        });
 
-        if (!transactionId || !userId || !pointsToAdd) {
-          console.error(
-            "Missing transactionId, userId, or pointsToAdd in payment intent metadata",
-            { transactionId, userId, pointsToAdd }
-          );
+        // Get metadata from checkout session
+        const { userId, amount } = checkoutSession.metadata;
+
+        if (!userId || !amount) {
+          console.error("Missing metadata in checkout session", {
+            userId,
+            amount,
+          });
           await updateWithRetry(
             ref(database, `webhook_errors/stripe_${uuidv4()}`),
             {
-              error: "Missing metadata",
+              error: "Missing checkout session metadata",
               eventId: event.id,
               timestamp: new Date().toISOString(),
             }
@@ -400,44 +546,83 @@ const stripeWebhook = async (req, res) => {
           return res.status(400).json({ error: "Missing metadata" });
         }
 
-        const points = parseInt(pointsToAdd);
+        // Amount directly becomes points (no conversion needed)
+        const points = parseInt(amount);
         if (isNaN(points) || points <= 0) {
-          console.error("Invalid pointsToAdd value", { pointsToAdd });
+          console.error("Invalid amount value", { amount });
           await updateWithRetry(
             ref(database, `webhook_errors/stripe_${uuidv4()}`),
             {
-              error: `Invalid pointsToAdd: ${pointsToAdd}`,
+              error: `Invalid amount: ${amount}`,
               eventId: event.id,
               timestamp: new Date().toISOString(),
             }
           );
-          return res.status(400).json({ error: "Invalid pointsToAdd" });
+          return res.status(400).json({ error: "Invalid amount" });
         }
 
-        const transactionRef = ref(database, `transactions/${transactionId}`);
-        const transactionSnapshot = await get(transactionRef);
-        if (!transactionSnapshot.exists()) {
-          console.error(`Transaction ${transactionId} not found`);
-          await updateWithRetry(
-            ref(database, `webhook_errors/stripe_${uuidv4()}`),
-            {
-              error: "Transaction not found",
-              eventId: event.id,
-              transactionId,
-              timestamp: new Date().toISOString(),
-            }
+        // Find the transaction by checkout session ID
+        const transactionsRef = ref(database, "transactions");
+        const transactionSnapshot = await get(transactionsRef);
+        const allTransactions = transactionSnapshot.val() || {};
+
+        let checkoutTransactionId = null;
+        let checkoutTransaction = null;
+
+        for (const [id, tx] of Object.entries(allTransactions)) {
+          if (tx.checkoutSessionId === checkoutSession.id) {
+            checkoutTransactionId = id;
+            checkoutTransaction = tx;
+            break;
+          }
+        }
+
+        if (!checkoutTransaction) {
+          console.warn(
+            `Transaction with checkoutSessionId ${checkoutSession.id} not found, creating one...`
           );
-          return res.status(404).json({ error: "Transaction not found" });
+
+          // Create transaction if it doesn't exist (race condition handling)
+          const transactionId = `stripe_checkout_${Date.now()}_${Math.random()
+            .toString(36)
+            .substr(2, 9)}`;
+
+          checkoutTransaction = {
+            id: transactionId,
+            userId,
+            amount: parseInt(amount),
+            currency: "KES",
+            status: "pending",
+            paymentMethod: "stripe",
+            checkoutSessionId: checkoutSession.id,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          await updateWithRetry(
+            ref(database, `transactions/${transactionId}`),
+            checkoutTransaction
+          );
+
+          checkoutTransactionId = transactionId;
+          console.log("✅ Created missing transaction:", transactionId);
         }
 
-        const transaction = transactionSnapshot.val();
-        if (transaction.status === "completed") {
-          return res.status(200).json({ received: true });
-        }
+        // Update transaction status
+        await updateWithRetry(
+          ref(database, `transactions/${checkoutTransactionId}`),
+          {
+            status: "completed",
+            updatedAt: new Date().toISOString(),
+          }
+        );
 
-        await updateWithRetry(transactionRef, {
-          status: "completed",
-          updatedAt: new Date().toISOString(),
+        // Update user points and wallet balance
+        console.log("🔄 Processing Stripe checkout session completion:", {
+          userId,
+          amount,
+          points,
+          checkoutSessionId: checkoutSession.id,
         });
 
         const userRef = ref(database, `users/${userId}`);
@@ -450,48 +635,200 @@ const stripeWebhook = async (req, res) => {
             currency: "KES",
           };
 
-          // Update user points and wallet balance
-          await updateWithRetry(userRef, {
+          console.log(
+            "🔄 Updating user points and wallet for Stripe payment:",
+            {
+              userId,
+              currentPoints,
+              pointsToAdd: points,
+              newPoints: currentPoints + points,
+              currentWallet: currentWallet.amount,
+              walletToAdd: points,
+              newWalletAmount: currentWallet.amount + points,
+            }
+          );
+
+          const updateData = {
             points: currentPoints + points,
             wallet: {
-              ...currentWallet,
-              amount: (currentWallet.amount || 0) + points, // Also add to wallet balance
+              amount: currentWallet.amount + points,
+              currency: "KES",
+            },
+            updatedAt: new Date().toISOString(),
+          };
+
+          console.log("💾 Backend: Updating user with data:", updateData);
+          await updateWithRetry(userRef, updateData);
+          console.log("✅ Backend: User update completed successfully");
+
+          // Record points history entry
+          const historyId = `deposit_stripe_checkout_${checkoutTransactionId}`;
+          await updateWithRetry(
+            ref(database, `pointsHistory/${userId}/${historyId}`),
+            {
+              id: historyId,
+              points: points,
+              reason: "DEPOSIT_STRIPE_CHECKOUT",
+              metadata: {
+                checkoutSessionId: checkoutSession.id,
+                transactionId: checkoutTransactionId,
+                amount: parseInt(amount),
+                currency: checkoutSession.currency,
+              },
+              timestamp: new Date().toISOString(),
+              previousPoints: currentPoints,
+              newPoints: currentPoints + points,
+            }
+          );
+
+          console.log(
+            `✅ Successfully processed Stripe checkout for user ${userId}: +${points} points`
+          );
+          console.log("✅ Successfully updated user points for Stripe payment");
+        } else {
+          console.error(
+            `❌ User ${userId} not found for Stripe checkout processing`
+          );
+        }
+        break;
+
+      case "payment_intent.succeeded":
+        console.log("🎉 Processing payment_intent.succeeded event");
+        const paymentIntent = event.data.object;
+        console.log("💳 Payment Intent data:", {
+          id: paymentIntent.id,
+          amount: paymentIntent.amount,
+          currency: paymentIntent.currency,
+          status: paymentIntent.status,
+          metadata: paymentIntent.metadata,
+        });
+
+        const {
+          userId: paymentUserId,
+          transactionId: paymentTransactionId,
+          pointsToAdd,
+        } = paymentIntent.metadata;
+
+        if (!paymentUserId || !paymentTransactionId || !pointsToAdd) {
+          console.error("Missing metadata in payment intent", {
+            userId: paymentUserId,
+            transactionId: paymentTransactionId,
+            pointsToAdd,
+          });
+          await updateWithRetry(
+            ref(database, `webhook_errors/stripe_${uuidv4()}`),
+            {
+              error: "Missing payment intent metadata",
+              eventId: event.id,
+              timestamp: new Date().toISOString(),
+            }
+          );
+          return res.status(400).json({ error: "Missing metadata" });
+        }
+
+        const paymentPoints = parseInt(pointsToAdd);
+        if (isNaN(paymentPoints) || paymentPoints <= 0) {
+          console.error("Invalid pointsToAdd in payment intent", {
+            pointsToAdd,
+          });
+          await updateWithRetry(
+            ref(database, `webhook_errors/stripe_${uuidv4()}`),
+            {
+              error: `Invalid pointsToAdd: ${pointsToAdd}`,
+              eventId: event.id,
+              timestamp: new Date().toISOString(),
+            }
+          );
+          return res.status(400).json({ error: "Invalid pointsToAdd" });
+        }
+
+        const paymentTransactionRef = ref(
+          database,
+          `transactions/${paymentTransactionId}`
+        );
+        const paymentTransactionSnapshot = await get(paymentTransactionRef);
+        if (!paymentTransactionSnapshot.exists()) {
+          console.error(`Transaction ${paymentTransactionId} not found`);
+          await updateWithRetry(
+            ref(database, `webhook_errors/stripe_${uuidv4()}`),
+            {
+              error: "Transaction not found",
+              eventId: event.id,
+              transactionId: paymentTransactionId,
+              timestamp: new Date().toISOString(),
+            }
+          );
+          return res.status(404).json({ error: "Transaction not found" });
+        }
+
+        const paymentTransaction = paymentTransactionSnapshot.val();
+        if (paymentTransaction.status === "completed") {
+          console.log(
+            `Transaction ${paymentTransactionId} already completed, skipping`
+          );
+          return res.status(200).json({ received: true });
+        }
+
+        await updateWithRetry(paymentTransactionRef, {
+          status: "completed",
+          updatedAt: new Date().toISOString(),
+        });
+
+        const paymentUserRef = ref(database, `users/${paymentUserId}`);
+        const paymentUserSnapshot = await get(paymentUserRef);
+        if (paymentUserSnapshot.exists()) {
+          const paymentUserData = paymentUserSnapshot.val();
+          const paymentCurrentPoints = paymentUserData.points || 0;
+          const paymentCurrentWallet = paymentUserData.wallet || {
+            amount: 0,
+            currency: "KES",
+          };
+
+          await updateWithRetry(paymentUserRef, {
+            points: paymentCurrentPoints + paymentPoints,
+            wallet: {
+              ...paymentCurrentWallet,
+              amount: (paymentCurrentWallet.amount || 0) + paymentPoints,
               currency: "KES",
               lastUpdated: new Date().toISOString(),
             },
             updatedAt: new Date().toISOString(),
           });
 
-          // Record points history entry (idempotent per transaction)
-          const historyId = `deposit_stripe_${transactionId}`;
+          const paymentHistoryId = `deposit_stripe_${paymentTransactionId}`;
           await updateWithRetry(
-            ref(database, `pointsHistory/${userId}/${historyId}`),
+            ref(database, `pointsHistory/${paymentUserId}/${paymentHistoryId}`),
             {
-              id: historyId,
-              points: points,
+              id: paymentHistoryId,
+              points: paymentPoints,
               reason: "DEPOSIT_STRIPE",
               metadata: {
-                transactionId,
+                transactionId: paymentTransactionId,
                 paymentIntentId: paymentIntent.id,
-                amount: transaction.amount,
-                currency: transaction.currency,
+                amount: paymentTransaction.amount,
+                currency: paymentTransaction.currency,
               },
               timestamp: new Date().toISOString(),
-              previousPoints: currentPoints,
-              newPoints: currentPoints + points,
-              previousWalletAmount: currentWallet.amount || 0,
-              newWalletAmount: (currentWallet.amount || 0) + points,
+              previousPoints: paymentCurrentPoints,
+              newPoints: paymentCurrentPoints + paymentPoints,
+              previousWalletAmount: paymentCurrentWallet.amount || 0,
+              newWalletAmount:
+                (paymentCurrentWallet.amount || 0) + paymentPoints,
             }
           );
+
+          console.log(
+            `✅ Successfully processed Stripe payment intent for user ${paymentUserId}: +${paymentPoints} points`
+          );
         } else {
-          console.error(`User ${userId} not found`);
+          console.error(`User ${paymentUserId} not found`);
           await updateWithRetry(
             ref(database, `webhook_errors/stripe_${uuidv4()}`),
             {
               error: "User not found",
               eventId: event.id,
-              transactionId,
-              userId,
+              transactionId: paymentTransactionId,
+              userId: paymentUserId,
               timestamp: new Date().toISOString(),
             }
           );
@@ -502,45 +839,180 @@ const stripeWebhook = async (req, res) => {
       case "customer.subscription.created":
       case "customer.subscription.updated":
       case "customer.subscription.deleted":
+        console.log(`📋 Processing subscription event: ${event.type}`);
         const subscription = event.data.object;
-        const subscriptionStatus = subscription.status;
-        const subscriptionId = subscription.id;
-        const customerId = subscription.customer;
+        console.log("📑 Subscription data:", {
+          id: subscription.id,
+          status: subscription.status,
+          customer: subscription.customer,
+        });
 
         const subscriptionUserQuery = ref(database, "users");
         const subscriptionUserSnapshot = await get(
           query(
             subscriptionUserQuery,
             orderByChild("stripeCustomerId"),
-            equalTo(customerId)
+            equalTo(subscription.customer)
           )
         );
         if (subscriptionUserSnapshot.exists()) {
           const subUserId = Object.keys(subscriptionUserSnapshot.val())[0];
           await updateWithRetry(ref(database, `users/${subUserId}`), {
-            subscriptionId,
-            subscriptionStatus,
+            subscriptionId: subscription.id,
+            subscriptionStatus: subscription.status,
             updatedAt: new Date().toISOString(),
           });
+          console.log(
+            `✅ Updated subscription status for user ${subUserId}: ${subscription.status}`
+          );
+        } else {
+          console.error(
+            `No user found with stripeCustomerId ${subscription.customer}`
+          );
+          await updateWithRetry(
+            ref(database, `webhook_errors/stripe_${uuidv4()}`),
+            {
+              error: "No user found for subscription",
+              eventId: event.id,
+              customerId: subscription.customer,
+              timestamp: new Date().toISOString(),
+            }
+          );
         }
         break;
 
       default:
+        console.log(`ℹ️ Unhandled event type: ${event.type}`);
     }
+
+    // Mark event as processed after successful processing
+    await updateWithRetry(eventRef, {
+      processed: true,
+      type: event.type,
+      timestamp: new Date().toISOString(),
+    });
 
     return res.status(200).json({ received: true });
   } catch (error) {
-    console.error("Error processing Stripe webhook:", {
+    console.error("❌ Error processing Stripe event:", {
       message: error.message,
       stack: error.stack,
     });
     await updateWithRetry(ref(database, `webhook_errors/stripe_${uuidv4()}`), {
-      error: error.message,
-      signature: sig,
-      payloadLength: req.body.length,
+      error: `Failed to process Stripe event: ${error.message}`,
+      eventId: event.id,
       timestamp: new Date().toISOString(),
     });
-    return res.status(400).json({ error: "Webhook error" });
+    return res.status(500).json({ error: "Event processing failed" });
+  }
+};
+
+// Updated Stripe webhook handler
+const stripeWebhook = async (req, res) => {
+  try {
+    console.log("🔔 Stripe webhook received at", new Date().toISOString());
+    console.log("📋 Headers:", req.headers);
+    console.log("📦 Body type:", typeof req.body);
+    console.log("📦 Body length:", req.body?.length || 0);
+    console.log(
+      "📦 Body preview:",
+      req.body?.toString().substring(0, 200) + "..."
+    );
+
+    if (!stripe) {
+      console.error("❌ Stripe object is not defined");
+      await updateWithRetry(
+        ref(database, `webhook_errors/stripe_${uuidv4()}`),
+        {
+          error: "Stripe object not defined",
+          timestamp: new Date().toISOString(),
+        }
+      );
+      return res.status(500).json({ error: "Stripe configuration error" });
+    }
+
+    let event;
+    try {
+      console.log("🔍 Attempting to construct event...");
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        req.headers["stripe-signature"],
+        webhookSecret
+      );
+      console.log("✅ Event constructed successfully:", {
+        id: event.id,
+        type: event.type,
+      });
+    } catch (error) {
+      console.error("❌ Stripe webhook signature verification failed:", {
+        message: error.message,
+        stack: error.stack,
+      });
+
+      if (process.env.NODE_ENV === "development") {
+        console.warn(
+          "🔧 DEVELOPMENT MODE: Processing webhook despite signature verification failure"
+        );
+        try {
+          event = JSON.parse(req.body.toString());
+
+          // Double-check deduplication in development mode
+          const eventRef = ref(database, `webhook_events/stripe_${event.id}`);
+          const eventSnapshot = await get(eventRef);
+          if (eventSnapshot.exists()) {
+            console.log("✅ Event already processed, skipping", event.id);
+            return res.status(200).json({ received: true });
+          }
+
+          // Process the event in development mode
+          return await processStripeEvent(event, res);
+        } catch (parseError) {
+          console.error("❌ Failed to parse webhook body:", parseError);
+          await updateWithRetry(
+            ref(database, `webhook_errors/stripe_${uuidv4()}`),
+            {
+              error: `Failed to parse webhook body: ${parseError.message}`,
+              timestamp: new Date().toISOString(),
+            }
+          );
+          return res.status(400).json({ error: "Invalid webhook payload" });
+        }
+      } else {
+        await updateWithRetry(
+          ref(database, `webhook_errors/stripe_${uuidv4()}`),
+          {
+            error: `Webhook signature verification failed: ${error.message}`,
+            stack: error.stack,
+            timestamp: new Date().toISOString(),
+          }
+        );
+        return res
+          .status(400)
+          .json({ error: "Webhook signature verification failed" });
+      }
+    }
+
+    // Check deduplication for normal path
+    const eventRef = ref(database, `webhook_events/stripe_${event.id}`);
+    const eventSnapshot = await get(eventRef);
+    if (eventSnapshot.exists()) {
+      console.log("✅ Event already processed, skipping", event.id);
+      return res.status(200).json({ received: true });
+    }
+
+    // Process the event (only for successful signature verification)
+    return await processStripeEvent(event, res);
+  } catch (error) {
+    console.error("❌ Stripe webhook error:", {
+      message: error.message,
+      stack: error.stack,
+    });
+    await updateWithRetry(ref(database, `webhook_errors/stripe_${uuidv4()}`), {
+      error: `Webhook processing failed: ${error.message}`,
+      stack: error.stack,
+      timestamp: new Date().toISOString(),
+    });
+    return res.status(500).json({ error: "Webhook processing failed" });
   }
 };
 
@@ -552,15 +1024,10 @@ const verifyMpesaWebhookSignature = (req, res, next) => {
 
     if (!signature || !timestamp) {
       console.warn("Missing M-Pesa webhook signature or timestamp");
-      // For now, allow without signature verification but log the warning
-      // In production, you should implement proper signature verification
       return next();
     }
 
     // TODO: Implement proper M-Pesa signature verification
-    // This would involve creating a hash of the payload with your secret
-    // and comparing it with the provided signature
-
     next();
   } catch (error) {
     console.error("M-Pesa webhook signature verification error:", error);
@@ -570,10 +1037,18 @@ const verifyMpesaWebhookSignature = (req, res, next) => {
 
 // M-Pesa webhook handler
 const mpesaWebhook = async (req, res) => {
-  let CheckoutRequestID = "unknown"; // Declare outside try block for error handling
+  let CheckoutRequestID = "unknown";
   try {
+    console.log("🔔 M-Pesa webhook received at", new Date().toISOString());
+    console.log("📋 M-Pesa headers:", req.headers);
+    console.log("📦 M-Pesa body type:", typeof req.body);
+    console.log("📦 M-Pesa body length:", req.body?.length || 0);
+
     const { Body } = req.body;
-    console.log("M-Pesa webhook payload", req.body);
+    console.log(
+      "📄 M-Pesa webhook payload:",
+      JSON.stringify(req.body, null, 2)
+    );
     if (!Body || !Body.stkCallback) {
       console.error("Invalid M-Pesa webhook payload", { body: req.body });
       await updateWithRetry(ref(database, `webhook_errors/mpesa_${uuidv4()}`), {
@@ -589,7 +1064,7 @@ const mpesaWebhook = async (req, res) => {
       ResultCode,
       ResultDesc,
     } = stkCallback;
-    CheckoutRequestID = requestId; // Assign to outer scope variable
+    CheckoutRequestID = requestId;
 
     const eventRef = ref(database, `webhook_events/mpesa_${CheckoutRequestID}`);
     const eventSnapshot = await get(eventRef);
@@ -597,12 +1072,10 @@ const mpesaWebhook = async (req, res) => {
       return res.status(200).json({ received: true });
     }
 
-    // Get all transactions and filter by checkoutRequestId to avoid index requirement
     const transactionsRef = ref(database, "transactions");
     const transactionSnapshot = await get(transactionsRef);
     const allTransactions = transactionSnapshot.val() || {};
 
-    // Find transaction with matching checkoutRequestId
     let transactionId = null;
     let transaction = null;
 
@@ -634,6 +1107,17 @@ const mpesaWebhook = async (req, res) => {
 
     if (ResultCode === 0) {
       // Success
+      console.log(
+        "✅ M-Pesa payment successful for transaction:",
+        transactionId
+      );
+      console.log("💰 M-Pesa transaction details:", {
+        transactionId,
+        userId: transaction.userId,
+        amount: transaction.amount,
+        pointsToAdd: transaction.pointsToAdd || transaction.amount,
+      });
+
       await updateWithRetry(ref(database, `transactions/${transactionId}`), {
         status: "completed",
         updatedAt: new Date().toISOString(),
@@ -665,19 +1149,29 @@ const mpesaWebhook = async (req, res) => {
           return res.status(400).json({ error: "Invalid pointsToAdd" });
         }
 
-        // Update user points and wallet balance
+        console.log("🔄 Updating user points and wallet:", {
+          userId: transaction.userId,
+          currentPoints,
+          currentWalletAmount: currentWallet.amount || 0,
+          pointsToAdd,
+          newPoints: currentPoints + pointsToAdd,
+          newWalletAmount: (currentWallet.amount || 0) + pointsToAdd,
+        });
+
         await updateWithRetry(userRef, {
           points: currentPoints + pointsToAdd,
           wallet: {
-            ...currentWallet,
-            amount: (currentWallet.amount || 0) + pointsToAdd, // Also add to wallet balance
+            amount: (currentWallet.amount || 0) + pointsToAdd,
             currency: "KES",
             lastUpdated: new Date().toISOString(),
           },
           updatedAt: new Date().toISOString(),
         });
 
-        // Record points history entry (idempotent per transaction)
+        console.log(
+          "✅ Successfully updated user points and wallet for M-Pesa payment"
+        );
+
         const historyId = `deposit_mpesa_${transactionId}`;
         await updateWithRetry(
           ref(database, `pointsHistory/${transaction.userId}/${historyId}`),
@@ -712,7 +1206,6 @@ const mpesaWebhook = async (req, res) => {
         return res.status(404).json({ error: "User not found" });
       }
     } else {
-      // Failed
       await updateWithRetry(ref(database, `transactions/${transactionId}`), {
         status: "failed",
         error: ResultDesc,
@@ -768,10 +1261,8 @@ const convertWalletToPoints = async (req, res) => {
       return res.status(200).json({ message: "No wallet balance to convert" });
     }
 
-    // Convert wallet amount directly to points (1:1)
     const pointsToAdd = Math.round(amount);
 
-    // Update user document
     await updateWithRetry(userRef, {
       points: (userData.points || 0) + pointsToAdd,
       wallet: { amount: 0, currency: "KES" },
@@ -808,7 +1299,6 @@ const getUserTransactions = async (req, res) => {
       return res.status(400).json({ error: "User ID is required" });
     }
 
-    // Get all transactions and filter on the server side for simplicity
     const transactionsRef = ref(database, "transactions");
     const transactionSnapshot = await get(transactionsRef);
 
@@ -818,16 +1308,25 @@ const getUserTransactions = async (req, res) => {
 
     const transactionsData = transactionSnapshot.val() || {};
 
-    // Convert to array and filter by userId and type
     let transactions = Object.entries(transactionsData)
       .map(([id, tx]) => ({ id, ...tx }))
       .filter((tx) => tx.userId === userId);
 
     if (type) {
-      transactions = transactions.filter((tx) => tx.type === type);
+      transactions = transactions.filter((tx) => {
+        // For deposit type, include both M-Pesa and Stripe transactions
+        if (type === "deposit") {
+          return (
+            tx.type === "deposit" ||
+            tx.paymentMethod === "stripe" ||
+            tx.paymentMethod === "mpesa"
+          );
+        }
+        // For other types, check both type and paymentMethod
+        return tx.type === type || tx.paymentMethod === type;
+      });
     }
 
-    // Sort by creation date (newest first) and limit results
     transactions = transactions
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
       .slice(0, parseInt(limit))
@@ -846,8 +1345,92 @@ const getUserTransactions = async (req, res) => {
   }
 };
 
+// Create Stripe checkout session
+const createStripeCheckoutSession = async (req, res) => {
+  try {
+    const { amount, userId } = req.body;
+
+    if (!amount || !userId) {
+      return res.status(400).json({
+        error: "Missing required fields",
+        message: "Amount and userId are required",
+      });
+    }
+
+    const amountInCents = Math.round(amount * 100);
+    if (amountInCents < 50) {
+      return res.status(400).json({
+        error: "Amount too low",
+        message: "Amount must be at least $0.50 (KES 50)",
+      });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: "usd",
+            product_data: {
+              name: `GameTribe Points - ${amount} points`,
+              description: `Deposit ${amount} KES for ${amount} points`,
+            },
+            unit_amount: amountInCents,
+          },
+          quantity: 1,
+        },
+      ],
+      mode: "payment",
+      success_url: `${
+        process.env.FRONTEND_URL || "http://localhost:5173"
+      }/profile?tab=wallet&payment=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${
+        process.env.FRONTEND_URL || "http://localhost:5173"
+      }/profile?tab=wallet&payment=cancelled`,
+      metadata: {
+        userId,
+        amount: amount.toString(),
+        currency: "KES",
+      },
+    });
+
+    const transactionId = `stripe_checkout_${Date.now()}_${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
+    const transaction = {
+      id: transactionId,
+      userId,
+      amount: parseInt(amount),
+      currency: "KES",
+      status: "pending",
+      paymentMethod: "stripe",
+      checkoutSessionId: session.id,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await updateWithRetry(
+      ref(database, `transactions/${transactionId}`),
+      transaction
+    );
+
+    res.json({
+      sessionId: session.id,
+      url: session.url,
+      transactionId,
+    });
+  } catch (error) {
+    console.error("Error creating Stripe checkout session:", error);
+    return res.status(500).json({
+      error: "Failed to create checkout session",
+      message: error.message,
+    });
+  }
+};
+
 module.exports = {
   createStripePayment,
+  createStripeCheckoutSession,
   createMpesaPayment,
   stripeWebhook,
   mpesaWebhook,
@@ -855,4 +1438,5 @@ module.exports = {
   convertWalletToPoints,
   getUserTransactions,
   getStripeTransactionStatus,
+  processStripeEvent,
 };
