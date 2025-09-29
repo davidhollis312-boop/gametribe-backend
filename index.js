@@ -7,6 +7,7 @@ const multer = require("multer");
 
 // Import new performance modules
 const {
+  noLimiter,
   devLimiter,
   generalLimiter,
   authLimiter,
@@ -97,14 +98,24 @@ app.use(
   })
 );
 
-// Apply general rate limiting (devLimiter for development - 5000 requests per 15 minutes)
-app.use(devLimiter);
+// Apply general rate limiting (noLimiter for development, devLimiter for production)
+const isDevelopment =
+  process.env.NODE_ENV === "development" ||
+  process.env.NODE_ENV !== "production";
+const generalRateLimiter = isDevelopment ? noLimiter : devLimiter;
+
+console.log(
+  `🔧 Rate limiting mode: ${
+    isDevelopment ? "DISABLED (development)" : "ENABLED (production)"
+  }`
+);
+app.use(generalRateLimiter);
 
 // Define Stripe webhook route FIRST with raw parser
 // Stripe webhook route FIRST
 app.post(
   "/api/payments/stripe/webhook",
-  webhookLimiter,
+  isDevelopment ? noLimiter : webhookLimiter,
   express.raw({ type: "application/json" }),
   (req, res, next) => {
     console.log("🚀 Stripe webhook route hit");
@@ -135,27 +146,35 @@ app.post("/api/payments/stripe/test-webhook", (req, res) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Mount routes with rate limiting
+// Mount routes with conditional rate limiting
 app.use("/api/posts", postsRouter);
 app.use("/api/clans", clansRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/events", eventsRouter);
-app.use("/api/payments", paymentLimiter, paymentRouter);
+app.use(
+  "/api/payments",
+  isDevelopment ? noLimiter : paymentLimiter,
+  paymentRouter
+);
 app.use("/api/leaderboard", leaderboardRouter);
 app.use("/api/contact", contactRouter);
 
-// ✅ NEW: Mount production-grade routes with rate limiting
+// ✅ NEW: Mount production-grade routes with conditional rate limiting
 app.use("/api/analytics", analyticsRouter);
-app.use("/api/search", searchLimiter, searchRouter);
+app.use("/api/search", isDevelopment ? noLimiter : searchLimiter, searchRouter);
 app.use("/api/game-scores", gameScoresRouter);
 
-// Add auth route for cross-platform authentication with rate limiting
-app.use("/api/auth", authLimiter, require("./routes/auth"));
+// Add auth route for cross-platform authentication with conditional rate limiting
+app.use(
+  "/api/auth",
+  isDevelopment ? noLimiter : authLimiter,
+  require("./routes/auth")
+);
 
 // Open Graph unfurl endpoint using proper scraper with new middleware
 app.get(
   "/api/og",
-  searchLimiter,
+  isDevelopment ? noLimiter : searchLimiter,
   rateLimitOgRequests,
   validateUrlMiddleware,
   async (req, res) => {
@@ -214,177 +233,186 @@ app.get(
 );
 
 // OpenStreetMap Nominatim API endpoint (Free alternative to Google Places)
-app.get("/api/places/search", searchLimiter, async (req, res) => {
-  try {
-    const { query, lat, lng } = req.query;
-    const clientIP = req.ip || req.connection.remoteAddress || "unknown";
+app.get(
+  "/api/places/search",
+  isDevelopment ? noLimiter : searchLimiter,
+  async (req, res) => {
+    try {
+      const { query, lat, lng } = req.query;
+      const clientIP = req.ip || req.connection.remoteAddress || "unknown";
 
-    // Check rate limit
-    if (!checkRateLimit(clientIP)) {
-      return res.status(429).json({
-        error: "Rate limit exceeded",
-        message:
-          "Too many requests. Please wait a moment before searching again.",
-      });
-    }
-
-    if (!query || query.length < 3) {
-      console.log("Query validation failed:", { query, length: query?.length });
-      return res
-        .status(400)
-        .json({ error: "Query must be at least 3 characters long" });
-    }
-
-    console.log("Places search request:", {
-      query,
-      lat,
-      lng,
-      queryLength: query.length,
-      clientIP,
-    });
-
-    // Build Nominatim API URL with optional location bias
-    let apiUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-      query
-    )}&limit=5&addressdetails=1&extratags=1`;
-
-    // Add location bias if coordinates are provided (prioritize nearby results)
-    if (lat && lng) {
-      // Use viewbox for location bias but don't restrict results to only within the box
-      const latOffset = 0.5; // ~55km radius
-      const lngOffset = 0.5; // ~55km radius
-      const minLon = parseFloat(lng) - lngOffset;
-      const minLat = parseFloat(lat) - latOffset;
-      const maxLon = parseFloat(lng) + lngOffset;
-      const maxLat = parseFloat(lat) + latOffset;
-      const viewbox = `${minLon},${minLat},${maxLon},${maxLat}`;
-      apiUrl += `&viewbox=${viewbox}`; // No bounded=1 to allow results outside the box
-    }
-
-    // Debug: Log the API URL being called
-    console.log("Nominatim API URL:", apiUrl);
-
-    // Add a small delay to be respectful to Nominatim API
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    // Use OpenStreetMap Nominatim API (completely free, no billing required)
-    // Add proper headers to comply with Nominatim usage policy
-    const response = await fetch(apiUrl, {
-      headers: {
-        "User-Agent":
-          "GameTribe-Community/1.0 (https://gametribe-backend.onrender.com)",
-        Accept: "application/json",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
-
-    if (!response.ok) {
-      console.error(
-        "Nominatim API error:",
-        response.status,
-        response.statusText
-      );
-      const errorText = await response.text();
-      console.error("Nominatim API error response:", errorText);
-
-      // If we get a 403 (blocked), provide a fallback response
-      if (response.status === 403) {
-        console.log("Nominatim API blocked, providing fallback suggestions");
-        return res.json({
-          suggestions: [
-            {
-              id: "fallback-1",
-              name: query,
-              address: `${query}, Kenya`,
-              location: {
-                lat: lat ? parseFloat(lat) : -1.1544312,
-                lng: lng ? parseFloat(lng) : 36.9650841,
-              },
-            },
-          ],
+      // Check rate limit
+      if (!checkRateLimit(clientIP)) {
+        return res.status(429).json({
+          error: "Rate limit exceeded",
+          message:
+            "Too many requests. Please wait a moment before searching again.",
         });
       }
 
-      throw new Error(`Nominatim API error: ${response.status} - ${errorText}`);
-    }
+      if (!query || query.length < 3) {
+        console.log("Query validation failed:", {
+          query,
+          length: query?.length,
+        });
+        return res
+          .status(400)
+          .json({ error: "Query must be at least 3 characters long" });
+      }
 
-    const data = await response.json();
+      console.log("Places search request:", {
+        query,
+        lat,
+        lng,
+        queryLength: query.length,
+        clientIP,
+      });
 
-    if (data && data.length > 0) {
-      let suggestions = data.map((place) => ({
-        id: place.place_id || place.osm_id,
-        name: place.display_name.split(",")[0] || place.name || "Unknown",
-        address: place.display_name,
-        location: {
-          lat: parseFloat(place.lat),
-          lng: parseFloat(place.lon),
-        },
-      }));
+      // Build Nominatim API URL with optional location bias
+      let apiUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+        query
+      )}&limit=5&addressdetails=1&extratags=1`;
 
-      // Sort by distance if user location is provided
+      // Add location bias if coordinates are provided (prioritize nearby results)
       if (lat && lng) {
-        const userLat = parseFloat(lat);
-        const userLng = parseFloat(lng);
+        // Use viewbox for location bias but don't restrict results to only within the box
+        const latOffset = 0.5; // ~55km radius
+        const lngOffset = 0.5; // ~55km radius
+        const minLon = parseFloat(lng) - lngOffset;
+        const minLat = parseFloat(lat) - latOffset;
+        const maxLon = parseFloat(lng) + lngOffset;
+        const maxLat = parseFloat(lat) + latOffset;
+        const viewbox = `${minLon},${minLat},${maxLon},${maxLat}`;
+        apiUrl += `&viewbox=${viewbox}`; // No bounded=1 to allow results outside the box
+      }
 
-        // Calculate distance using Haversine formula
-        const calculateDistance = (lat1, lon1, lat2, lon2) => {
-          const R = 6371; // Earth's radius in kilometers
-          const dLat = ((lat2 - lat1) * Math.PI) / 180;
-          const dLon = ((lon2 - lon1) * Math.PI) / 180;
-          const a =
-            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos((lat1 * Math.PI) / 180) *
-              Math.cos((lat2 * Math.PI) / 180) *
-              Math.sin(dLon / 2) *
-              Math.sin(dLon / 2);
-          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-          return R * c; // Distance in kilometers
-        };
+      // Debug: Log the API URL being called
+      console.log("Nominatim API URL:", apiUrl);
 
-        // Add distance to each suggestion and sort by distance
-        suggestions = suggestions
-          .map((suggestion) => ({
-            ...suggestion,
-            distance: calculateDistance(
-              userLat,
-              userLng,
-              suggestion.location.lat,
-              suggestion.location.lng
-            ),
-          }))
-          .sort((a, b) => a.distance - b.distance);
+      // Add a small delay to be respectful to Nominatim API
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
-        // Debug: Log sorted suggestions with distances
-        console.log(
-          "Sorted suggestions by distance:",
-          suggestions.map((s) => ({
-            name: s.name,
-            address: s.address,
-            distance: `${s.distance.toFixed(2)}km`,
-          }))
+      // Use OpenStreetMap Nominatim API (completely free, no billing required)
+      // Add proper headers to comply with Nominatim usage policy
+      const response = await fetch(apiUrl, {
+        headers: {
+          "User-Agent":
+            "GameTribe-Community/1.0 (https://gametribe-backend.onrender.com)",
+          Accept: "application/json",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+      });
+
+      if (!response.ok) {
+        console.error(
+          "Nominatim API error:",
+          response.status,
+          response.statusText
         );
+        const errorText = await response.text();
+        console.error("Nominatim API error response:", errorText);
 
-        // Remove distance from final response (keep it internal)
-        suggestions = suggestions.map(
-          ({ distance, ...suggestion }) => suggestion
+        // If we get a 403 (blocked), provide a fallback response
+        if (response.status === 403) {
+          console.log("Nominatim API blocked, providing fallback suggestions");
+          return res.json({
+            suggestions: [
+              {
+                id: "fallback-1",
+                name: query,
+                address: `${query}, Kenya`,
+                location: {
+                  lat: lat ? parseFloat(lat) : -1.1544312,
+                  lng: lng ? parseFloat(lng) : 36.9650841,
+                },
+              },
+            ],
+          });
+        }
+
+        throw new Error(
+          `Nominatim API error: ${response.status} - ${errorText}`
         );
       }
 
-      res.json({ suggestions });
-    } else {
-      res.status(400).json({
-        error: "No results found",
-        message: "No places found for the given query",
+      const data = await response.json();
+
+      if (data && data.length > 0) {
+        let suggestions = data.map((place) => ({
+          id: place.place_id || place.osm_id,
+          name: place.display_name.split(",")[0] || place.name || "Unknown",
+          address: place.display_name,
+          location: {
+            lat: parseFloat(place.lat),
+            lng: parseFloat(place.lon),
+          },
+        }));
+
+        // Sort by distance if user location is provided
+        if (lat && lng) {
+          const userLat = parseFloat(lat);
+          const userLng = parseFloat(lng);
+
+          // Calculate distance using Haversine formula
+          const calculateDistance = (lat1, lon1, lat2, lon2) => {
+            const R = 6371; // Earth's radius in kilometers
+            const dLat = ((lat2 - lat1) * Math.PI) / 180;
+            const dLon = ((lon2 - lon1) * Math.PI) / 180;
+            const a =
+              Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos((lat1 * Math.PI) / 180) *
+                Math.cos((lat2 * Math.PI) / 180) *
+                Math.sin(dLon / 2) *
+                Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c; // Distance in kilometers
+          };
+
+          // Add distance to each suggestion and sort by distance
+          suggestions = suggestions
+            .map((suggestion) => ({
+              ...suggestion,
+              distance: calculateDistance(
+                userLat,
+                userLng,
+                suggestion.location.lat,
+                suggestion.location.lng
+              ),
+            }))
+            .sort((a, b) => a.distance - b.distance);
+
+          // Debug: Log sorted suggestions with distances
+          console.log(
+            "Sorted suggestions by distance:",
+            suggestions.map((s) => ({
+              name: s.name,
+              address: s.address,
+              distance: `${s.distance.toFixed(2)}km`,
+            }))
+          );
+
+          // Remove distance from final response (keep it internal)
+          suggestions = suggestions.map(
+            ({ distance, ...suggestion }) => suggestion
+          );
+        }
+
+        res.json({ suggestions });
+      } else {
+        res.status(400).json({
+          error: "No results found",
+          message: "No places found for the given query",
+        });
+      }
+    } catch (error) {
+      console.error("Nominatim API error:", error);
+      res.status(500).json({
+        error: "Failed to search places",
+        details: error.message,
       });
     }
-  } catch (error) {
-    console.error("Nominatim API error:", error);
-    res.status(500).json({
-      error: "Failed to search places",
-      details: error.message,
-    });
   }
-});
+);
 
 app.get("/api/test", (req, res) => {
   res.json({ message: "API is working" });

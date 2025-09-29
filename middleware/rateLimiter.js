@@ -6,11 +6,11 @@ const rateLimit = require("express-rate-limit");
  */
 
 /**
- * Development-friendly rate limiter (more lenient)
+ * Development-friendly rate limiter (very lenient)
  */
 const devLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5000, // Very high limit for development
+  max: 10000, // Very high limit for development (increased from 5000)
   message: {
     error: "Too many requests",
     message: "Too many requests from this IP, please try again later.",
@@ -32,7 +32,7 @@ const devLimiter = rateLimit({
  */
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 1000, // Limit each IP to 1000 requests per windowMs (increased for development)
+  max: 5000, // Limit each IP to 5000 requests per windowMs (increased for development)
   message: {
     error: "Too many requests",
     message: "Too many requests from this IP, please try again later.",
@@ -146,7 +146,7 @@ const uploadLimiter = rateLimit({
  */
 const searchLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 30, // Limit each IP to 30 searches per minute
+  max: 100, // Limit each IP to 100 searches per minute (increased from 30)
   message: {
     error: "Search rate limit exceeded",
     message: "Too many search requests from this IP, please try again later.",
@@ -186,6 +186,14 @@ const webhookLimiter = rateLimit({
 });
 
 /**
+ * No rate limiting (for development)
+ */
+const noLimiter = (req, res, next) => {
+  // Skip rate limiting entirely
+  next();
+};
+
+/**
  * Custom rate limiter factory
  */
 const createCustomLimiter = (windowMs, max, message) => {
@@ -207,6 +215,7 @@ const createCustomLimiter = (windowMs, max, message) => {
 };
 
 module.exports = {
+  noLimiter,
   devLimiter,
   generalLimiter,
   strictLimiter,
