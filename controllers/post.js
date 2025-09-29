@@ -179,12 +179,13 @@ const getPosts = async (req, res) => {
       const lastPostSnapshot = await lastPostRef.once("value");
       if (lastPostSnapshot.exists()) {
         const lastPost = lastPostSnapshot.val();
-        query = query.endAt(lastPost.createdAt);
+        // Use endBefore to get posts older than the last post
+        query = query.endBefore(lastPost.createdAt);
       }
     }
 
-    // Limit results
-    query = query.limitToLast(limitNum + 1); // +1 to check if there are more posts
+    // Limit results - get more than needed to account for filtering
+    query = query.limitToLast(limitNum * 2); // Get more posts to account for filtering
 
     const snapshot = await query.once("value");
     const postsData = snapshot.val() || {};
@@ -230,13 +231,7 @@ const getPosts = async (req, res) => {
 
     posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-    // ✅ NEW: Check if there are more posts
-    const hasMore = posts.length > limitNum;
-    if (hasMore) {
-      posts = posts.slice(0, limitNum); // Remove the extra post
-    }
-
-    // ✅ NEW: Apply filters
+    // ✅ NEW: Apply filters first
     if (category) {
       console.log("🔍 Filtering posts by category:", category);
       console.log("🔍 Total posts before category filtering:", posts.length);
@@ -278,6 +273,12 @@ const getPosts = async (req, res) => {
         "🔍 Filtered posts:",
         posts.map((p) => ({ id: p.id, clanId: p.clanId, category: p.category }))
       );
+    }
+
+    // ✅ NEW: Apply pagination after filtering
+    const hasMore = posts.length > limitNum;
+    if (hasMore) {
+      posts = posts.slice(0, limitNum); // Take only the requested number of posts
     }
 
     const response = {
