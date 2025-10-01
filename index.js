@@ -43,6 +43,7 @@ const { stripeWebhook } = require("./controllers/payment");
 const analyticsRouter = require("./routes/analytics");
 const searchRouter = require("./routes/search");
 const gameScoresRouter = require("./routes/gameScores");
+const gameReviewsRouter = require("./routes/gameReviews");
 
 const app = express();
 
@@ -163,6 +164,7 @@ app.use("/api/contact", contactRouter);
 app.use("/api/analytics", analyticsRouter);
 app.use("/api/search", isDevelopment ? noLimiter : searchLimiter, searchRouter);
 app.use("/api/game-scores", gameScoresRouter);
+app.use("/api/game-reviews", gameReviewsRouter);
 
 // Add auth route for cross-platform authentication with conditional rate limiting
 app.use(

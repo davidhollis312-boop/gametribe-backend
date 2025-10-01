@@ -18,10 +18,11 @@ const {
   rejectFriendRequest,
   getFriendRequests,
   cancelFriendRequest,
+  // Discover
+  getDiscoverUsers,
 } = require("../controllers/users");
 const authenticate = require("../middleware/auth");
 const { verifyToken } = require("../middleware/authMiddleware");
-
 
 router.get("/profile", authenticate, getUserProfile);
 router.put("/profile", authenticate, updateUserProfile);
@@ -37,20 +38,35 @@ router.put("/country", authenticate, updateUserCountry);
 
 // Friend Request System Routes
 router.post("/:userId/send-friend-request", authenticate, sendFriendRequest);
-router.post("/:userId/accept-friend-request", authenticate, acceptFriendRequest);
-router.post("/:userId/reject-friend-request", authenticate, rejectFriendRequest);
-router.post("/:userId/cancel-friend-request", authenticate, cancelFriendRequest);
+router.post(
+  "/:userId/accept-friend-request",
+  authenticate,
+  acceptFriendRequest
+);
+router.post(
+  "/:userId/reject-friend-request",
+  authenticate,
+  rejectFriendRequest
+);
+router.post(
+  "/:userId/cancel-friend-request",
+  authenticate,
+  cancelFriendRequest
+);
 router.get("/friend-requests", authenticate, getFriendRequests);
 
+// Discover users endpoint
+router.get("/discover", authenticate, getDiscoverUsers);
+
 // GET endpoint for token verification (for cross-platform auth)
-router.get('/verify', verifyToken, (req, res) => {
+router.get("/verify", verifyToken, (req, res) => {
   res.json({
     success: true,
     data: {
       user: req.user,
-      platform: 'community',
-      server: 'gametribe-backend'
-    }
+      platform: "community",
+      server: "gametribe-backend",
+    },
   });
 });
 

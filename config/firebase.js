@@ -1,12 +1,20 @@
 const admin = require("firebase-admin");
-const serviceAccount = require("../firebase-adminsdk.json");
 const { initializeStorage, storageUtils } = require("./storageConfig");
+
+// Use environment variables for Firebase Admin SDK credentials
+const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+  ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+  : require("./firebase-adminsdk.json"); // Fallback to file if env var not set
 
 try {
   const app = admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
-    databaseURL: "https://gametibe2025-default-rtdb.firebaseio.com",
-    storageBucket: "gasometibe2025.firebasestorage.app",
+    databaseURL:
+      process.env.FIREBASE_DATABASE_URL ||
+      "https://gametibe2025-default-rtdb.firebaseio.com",
+    storageBucket:
+      process.env.FIREBASE_STORAGE_BUCKET ||
+      "gasometibe2025.firebasestorage.app",
   });
 
   const auth = admin.auth();

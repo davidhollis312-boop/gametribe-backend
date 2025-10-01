@@ -623,6 +623,46 @@ const cancelFriendRequest = async (req, res) => {
   }
 };
 
+const getDiscoverUsers = async (req, res) => {
+  try {
+    const currentUserId = req.user.uid;
+
+    // Get all users from Firebase
+    const usersRef = database.ref("users");
+    const usersSnapshot = await usersRef.once("value");
+    const allUsers = usersSnapshot.val() || {};
+
+    // Convert to array and filter out current user and users without displayName
+    const usersArray = Object.entries(allUsers)
+      .map(([uid, userData]) => ({
+        uid,
+        ...userData,
+      }))
+      .filter(
+        (user) =>
+          user.uid !== currentUserId &&
+          user.displayName &&
+          user.displayName.trim() !== ""
+      );
+
+    // Shuffle and take 5 random users
+    const shuffled = usersArray.sort(() => 0.5 - Math.random());
+    const randomUsers = shuffled.slice(0, 5);
+
+    res.status(200).json({
+      success: true,
+      users: randomUsers,
+    });
+  } catch (error) {
+    console.error("Error fetching discover users:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch discover users",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getUserProfile,
   updateUserProfile,
@@ -641,4 +681,5 @@ module.exports = {
   rejectFriendRequest,
   getFriendRequests,
   cancelFriendRequest,
+  getDiscoverUsers,
 };
