@@ -2,9 +2,7 @@ const admin = require("firebase-admin");
 const { initializeStorage, storageUtils } = require("./storageConfig");
 
 // Use environment variables for Firebase Admin SDK credentials
-const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
-  ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
-  : require("./firebase-adminsdk.json"); // Fallback to file if env var not set
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
 
 try {
   const app = admin.initializeApp({
