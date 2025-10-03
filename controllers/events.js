@@ -104,7 +104,7 @@ const createEvent = async (req, res, next) => {
 
 const getEvents = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, search = "", sortBy = "startDate", sortOrder = "asc" } = req.query;
+    const { page = 1, limit = 10, search = "", sortBy = "createdAt", sortOrder = "desc" } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const offset = (pageNum - 1) * limitNum;
@@ -140,7 +140,7 @@ const getEvents = async (req, res, next) => {
       eventsArray = eventsArray.filter(event => 
         event.title.toLowerCase().includes(search.toLowerCase()) ||
         event.description.toLowerCase().includes(search.toLowerCase()) ||
-        event.category.toLowerCase().includes(search.toLowerCase())
+        (event.category && event.category.toLowerCase().includes(search.toLowerCase()))
       );
     }
 
