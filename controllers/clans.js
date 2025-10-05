@@ -1,6 +1,10 @@
 const { database, storage } = require("../config/firebase");
 const { v4: uuidv4 } = require("uuid");
 
+// Simple in-memory rate limiter for presence sync
+const presenceSyncLimiter = new Map();
+const PRESENCE_SYNC_RATE_LIMIT = 1000; // 1 second between calls
+
 const getClans = async (req, res) => {
   try {
     const clansRef = database.ref("clans");
@@ -678,6 +682,15 @@ const syncPresence = async (req, res) => {
         .json({ error: "Unauthorized to sync presence for this user" });
     }
 
+    // Rate limiting for presence sync
+    const now = Date.now();
+    const lastSync = presenceSyncLimiter.get(userId);
+    if (lastSync && now - lastSync < PRESENCE_SYNC_RATE_LIMIT) {
+      console.log("⚠️ Presence sync rate limited for user (clans):", userId);
+      return res.status(429).json({ error: "Presence sync rate limited" });
+    }
+    presenceSyncLimiter.set(userId, now);
+
     // Ensure isOnline is a boolean
     const onlineStatus = Boolean(isOnline);
 
@@ -688,16 +701,52 @@ const syncPresence = async (req, res) => {
       onlineStatus
     );
 
-    const presenceRef = database.ref(`presence/${userId}`);
-    await presenceRef.set({
-      isOnline: onlineStatus,
-      lastActive: new Date().toISOString(),
-    });
-    await database.ref(`users/${userId}/onlineStatus`).set({
-      isOnline: onlineStatus,
-      lastActive: new Date().toISOString(),
-    });
-    return res.status(200).json({ message: "Presence synced" });
+    // Create simple, serializable presence data with explicit JSON serialization
+    const presenceData = JSON.parse(
+      JSON.stringify({
+        isOnline: onlineStatus,
+        lastActive: new Date().toISOString(),
+        userId: userId,
+      })
+    );
+
+    // Use Promise.all to write to both locations simultaneously but handle errors separately
+    try {
+      const presenceRef = database.ref(`presence/${userId}`);
+      const userStatusRef = database.ref(`users/${userId}/onlineStatus`);
+
+      await Promise.all([
+        presenceRef.set(presenceData),
+        userStatusRef.set(presenceData),
+      ]);
+
+      console.log("✅ Presence synced successfully for user (clans):", userId);
+      return res.status(200).json({ message: "Presence synced" });
+    } catch (firebaseError) {
+      console.error(
+        "❌ Firebase error during presence sync (clans):",
+        firebaseError.message
+      );
+      // Try to write to a simpler structure if the main write fails
+      try {
+        const simpleData = {
+          isOnline: onlineStatus,
+          lastActive: Date.now(), // Use timestamp instead of ISO string
+        };
+        await database.ref(`presence/${userId}`).set(simpleData);
+        console.log(
+          "✅ Fallback presence sync successful for user (clans):",
+          userId
+        );
+        return res.status(200).json({ message: "Presence synced (fallback)" });
+      } catch (fallbackError) {
+        console.error(
+          "❌ Fallback presence sync also failed (clans):",
+          fallbackError.message
+        );
+        throw fallbackError;
+      }
+    }
   } catch (error) {
     console.error("Error syncing presence:", error);
     return res.status(500).json({ error: "Failed to sync presence" });
