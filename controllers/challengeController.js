@@ -808,6 +808,7 @@ const getChallengeHistory = async (req, res) => {
             challengedName,
             challengerAvatar,
             challengedAvatar,
+            gameId: challengeData.gameId,
             gameTitle: challengeData.gameTitle,
             gameImage: challengeData.gameImage,
             betAmount: challengeData.betAmount,

@@ -661,18 +661,40 @@ const syncPresence = async (req, res) => {
   try {
     const { userId, isOnline } = req.body;
     const currentUserId = req.user.uid;
+
+    // Validate userId is a string
+    if (!userId || typeof userId !== "string") {
+      console.error(
+        "Invalid userId in syncPresence (clans):",
+        userId,
+        typeof userId
+      );
+      return res.status(400).json({ error: "Invalid userId" });
+    }
+
     if (userId !== currentUserId) {
       return res
         .status(403)
         .json({ error: "Unauthorized to sync presence for this user" });
     }
+
+    // Ensure isOnline is a boolean
+    const onlineStatus = Boolean(isOnline);
+
+    console.log(
+      "🔄 Syncing presence for user (clans):",
+      userId,
+      "isOnline:",
+      onlineStatus
+    );
+
     const presenceRef = database.ref(`presence/${userId}`);
     await presenceRef.set({
-      isOnline,
-      lastActive: Date.now(),
+      isOnline: onlineStatus,
+      lastActive: new Date().toISOString(),
     });
     await database.ref(`users/${userId}/onlineStatus`).set({
-      isOnline,
+      isOnline: onlineStatus,
       lastActive: new Date().toISOString(),
     });
     return res.status(200).json({ message: "Presence synced" });
