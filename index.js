@@ -44,6 +44,10 @@ const analyticsRouter = require("./routes/analytics");
 const searchRouter = require("./routes/search");
 const gameScoresRouter = require("./routes/gameScores");
 const gameReviewsRouter = require("./routes/gameReviews");
+const gamesRouter = require("./routes/games");
+const challengeRouter = require("./routes/challenges");
+const notificationRouter = require("./routes/notifications");
+const walletRouter = require("./routes/wallet");
 
 const app = express();
 
@@ -165,6 +169,10 @@ app.use("/api/analytics", analyticsRouter);
 app.use("/api/search", isDevelopment ? noLimiter : searchLimiter, searchRouter);
 app.use("/api/game-scores", gameScoresRouter);
 app.use("/api/game-reviews", gameReviewsRouter);
+app.use("/api/games", gamesRouter);
+app.use("/api/challenges", challengeRouter);
+app.use("/api/notifications", notificationRouter);
+app.use("/api/wallet", walletRouter);
 
 // Add auth route for cross-platform authentication with conditional rate limiting
 app.use(
@@ -193,7 +201,6 @@ app.get(
       }
 
       const ogScraper = require("./utils/ogScraper");
-      const data = await ogScraper.scrape(targetUrl);
 
       // Cache the result
       setCachedOgData(targetUrl, data);

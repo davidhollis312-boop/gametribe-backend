@@ -15,8 +15,21 @@ const sanitizeInput = (html) => {
 
 const createEvent = async (req, res, next) => {
   try {
-    const { title, description, startDate, endDate, imageUrl, category, maxAttendees, meetingType, location, locationCoords, locationName, locationAddress, meetingLink } =
-      req.body;
+    const {
+      title,
+      description,
+      startDate,
+      endDate,
+      imageUrl,
+      category,
+      maxAttendees,
+      meetingType,
+      location,
+      locationCoords,
+      locationName,
+      locationAddress,
+      meetingLink,
+    } = req.body;
     const userId = req.user.uid;
 
     if (!title || !description || !startDate) {
@@ -44,7 +57,8 @@ const createEvent = async (req, res, next) => {
       maxAttendees: maxAttendees ? parseInt(maxAttendees) : null,
       meetingType: meetingType || "physical",
       authorId: userId,
-      author: userData.username || userData.email?.split("@")[0] || "Unknown User",
+      author:
+        userData.username || userData.email?.split("@")[0] || "Unknown User",
       authorImage: userData.avatar || "",
       createdAt: new Date().toISOString(),
       bookings: {},
@@ -76,15 +90,21 @@ const createEvent = async (req, res, next) => {
     if (req.file) {
       const fileName = `events/${Date.now()}_${req.file.originalname}`;
       // Use unified storage upload utility exposed via storage.uploadFile
-      const uploaded = await storage.uploadFile({
-        buffer: req.file.buffer,
-        mimetype: req.file.mimetype,
-        originalname: req.file.originalname
-      }, fileName);
+      const uploaded = await storage.uploadFile(
+        {
+          buffer: req.file.buffer,
+          mimetype: req.file.mimetype,
+          originalname: req.file.originalname,
+        },
+        fileName
+      );
       if (uploaded && uploaded.url) {
         eventData.image = uploaded.url;
-      } else if (uploaded && typeof uploaded.getSignedUrl === 'function') {
-        const [signedUrl] = await uploaded.getSignedUrl({ action: 'read', expires: '03-01-2500' });
+      } else if (uploaded && typeof uploaded.getSignedUrl === "function") {
+        const [signedUrl] = await uploaded.getSignedUrl({
+          action: "read",
+          expires: "03-01-2500",
+        });
         eventData.image = signedUrl;
       }
     }
@@ -93,8 +113,10 @@ const createEvent = async (req, res, next) => {
     const newEventRef = eventsRef.push();
     await newEventRef.set(eventData);
 
-    console.log(`✅ Event created successfully - ID: ${newEventRef.key}, Title: "${eventData.title}", Start: ${eventData.startDate}`);
-    
+    console.log(
+      `✅ Event created successfully - ID: ${newEventRef.key}, Title: "${eventData.title}", Start: ${eventData.startDate}`
+    );
+
     res.status(201).json({ id: newEventRef.key, ...eventData });
   } catch (error) {
     console.error("Error in createEvent:", error.message, error.stack);
@@ -104,16 +126,24 @@ const createEvent = async (req, res, next) => {
 
 const getEvents = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, search = "", sortBy = "createdAt", sortOrder = "desc" } = req.query;
+    const {
+      page = 1,
+      limit = 10,
+      search = "",
+      sortBy = "createdAt",
+      sortOrder = "desc",
+    } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const offset = (pageNum - 1) * limitNum;
 
-    console.log(`📄 Fetching events - Page: ${pageNum}, Limit: ${limitNum}, Search: "${search}", Sort: ${sortBy} ${sortOrder}`);
+    console.log(
+      `📄 Fetching events - Page: ${pageNum}, Limit: ${limitNum}, Search: "${search}", Sort: ${sortBy} ${sortOrder}`
+    );
 
     const snapshot = await database.ref("events").once("value");
     const events = snapshot.val() || {};
-    
+
     let eventsArray = Object.entries(events).map(([id, event]) => ({
       id,
       ...event,
@@ -122,32 +152,38 @@ const getEvents = async (req, res, next) => {
 
     // Filter for upcoming events only (no buffer for testing)
     const now = new Date();
-    
+
     console.log(`🕐 Date filtering - Now: ${now.toISOString()}`);
     console.log(`📊 Total events before filtering: ${eventsArray.length}`);
-    
-    eventsArray = eventsArray.filter(event => {
+
+    eventsArray = eventsArray.filter((event) => {
       const eventStartDate = new Date(event.startDate);
       const isUpcoming = eventStartDate >= now;
-      console.log(`📅 Event "${event.title}" - Start: ${event.startDate}, Parsed: ${eventStartDate.toISOString()}, Upcoming: ${isUpcoming}`);
+      console.log(
+        `📅 Event "${event.title}" - Start: ${
+          event.startDate
+        }, Parsed: ${eventStartDate.toISOString()}, Upcoming: ${isUpcoming}`
+      );
       return isUpcoming;
     });
-    
+
     console.log(`📊 Total events after filtering: ${eventsArray.length}`);
 
     // Apply search filter
     if (search) {
-      eventsArray = eventsArray.filter(event => 
-        event.title.toLowerCase().includes(search.toLowerCase()) ||
-        event.description.toLowerCase().includes(search.toLowerCase()) ||
-        (event.category && event.category.toLowerCase().includes(search.toLowerCase()))
+      eventsArray = eventsArray.filter(
+        (event) =>
+          event.title.toLowerCase().includes(search.toLowerCase()) ||
+          event.description.toLowerCase().includes(search.toLowerCase()) ||
+          (event.category &&
+            event.category.toLowerCase().includes(search.toLowerCase()))
       );
     }
 
     // Sort events
     eventsArray.sort((a, b) => {
       let aValue, bValue;
-      
+
       switch (sortBy) {
         case "startDate":
           aValue = new Date(a.startDate);
@@ -182,7 +218,9 @@ const getEvents = async (req, res, next) => {
     const totalPages = Math.ceil(totalEvents / limitNum);
     const paginatedEvents = eventsArray.slice(offset, offset + limitNum);
 
-    console.log(`✅ Events fetched - Total: ${totalEvents}, Page: ${pageNum}/${totalPages}, Returned: ${paginatedEvents.length}`);
+    console.log(
+      `✅ Events fetched - Total: ${totalEvents}, Page: ${pageNum}/${totalPages}, Returned: ${paginatedEvents.length}`
+    );
 
     res.status(200).json({
       events: paginatedEvents,
@@ -192,8 +230,8 @@ const getEvents = async (req, res, next) => {
         totalEvents,
         hasNextPage: pageNum < totalPages,
         hasPrevPage: pageNum > 1,
-        limit: limitNum
-      }
+        limit: limitNum,
+      },
     });
   } catch (error) {
     console.error("Error fetching events:", error.message, error.stack);
@@ -223,15 +261,24 @@ const getEventById = async (req, res, next) => {
 const updateEvent = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { title, description, startDate, endDate, imageUrl, category, maxAttendees, meetingType, location, locationCoords, locationName, locationAddress, meetingLink } =
-      req.body;
+    const {
+      title,
+      description,
+      startDate,
+      endDate,
+      imageUrl,
+      category,
+      maxAttendees,
+      meetingType,
+      location,
+      locationCoords,
+      locationName,
+      locationAddress,
+      meetingLink,
+    } = req.body;
     const userId = req.user.uid;
 
-    if (
-      !title ||
-      !description ||
-      !startDate
-    ) {
+    if (!title || !description || !startDate) {
       return res
         .status(400)
         .json({ error: "Title, description, and start date are required" });
@@ -246,13 +293,21 @@ const updateEvent = async (req, res, next) => {
       return res.status(400).json({ error: "Invalid end date" });
     }
     if (end && end < start) {
-      return res.status(400).json({ error: "End date must be after start date" });
+      return res
+        .status(400)
+        .json({ error: "End date must be after start date" });
     }
     if (imageUrl && req.file) {
-      return res.status(400).json({ error: "Please provide either an image file or URL, not both" });
+      return res
+        .status(400)
+        .json({
+          error: "Please provide either an image file or URL, not both",
+        });
     }
     if (req.file && req.file.size > 5 * 1024 * 1024) {
-      return res.status(400).json({ error: "Image size must be less than 5MB" });
+      return res
+        .status(400)
+        .json({ error: "Image size must be less than 5MB" });
     }
 
     const eventRef = database.ref(`events/${id}`);
@@ -293,7 +348,8 @@ const updateEvent = async (req, res, next) => {
     if (endDate !== undefined) updates.endDate = end ? end.toISOString() : null;
     if (image !== undefined) updates.image = image;
     if (category !== undefined) updates.category = category;
-    if (maxAttendees !== undefined) updates.maxAttendees = maxAttendees ? parseInt(maxAttendees) : null;
+    if (maxAttendees !== undefined)
+      updates.maxAttendees = maxAttendees ? parseInt(maxAttendees) : null;
     if (meetingType !== undefined) updates.meetingType = meetingType;
     if (meetingType === "physical") {
       if (location !== undefined) updates.location = location;
@@ -305,7 +361,8 @@ const updateEvent = async (req, res, next) => {
         }
       }
       if (locationName !== undefined) updates.locationName = locationName;
-      if (locationAddress !== undefined) updates.locationAddress = locationAddress;
+      if (locationAddress !== undefined)
+        updates.locationAddress = locationAddress;
       // Clear virtual meeting fields when switching to physical
       updates.meetingLink = null;
     } else if (meetingType === "virtual") {
@@ -458,14 +515,17 @@ const getEventBookings = async (req, res, next) => {
 const getUserEventBookings = async (req, res, next) => {
   try {
     const userId = req.user.uid;
-    
+
     // Get all events created by this user
     const eventsRef = database.ref("events");
-    const snapshot = await eventsRef.orderByChild("authorId").equalTo(userId).once("value");
+    const snapshot = await eventsRef
+      .orderByChild("authorId")
+      .equalTo(userId)
+      .once("value");
     const events = snapshot.val() || {};
-    
+
     const allBookings = [];
-    
+
     // For each event, get the bookings
     for (const [eventId, event] of Object.entries(events)) {
       if (event.bookings) {
@@ -475,29 +535,34 @@ const getUserEventBookings = async (req, res, next) => {
               .ref(`users/${bookerId}`)
               .once("value");
             const user = userSnapshot.val() || {};
-            
+
             return {
               eventId,
               eventTitle: event.title,
               eventDate: event.startDate,
               bookerId,
-              bookerName: user.displayName || user.email?.split("@")[0] || "Anonymous",
+              bookerName:
+                user.displayName || user.email?.split("@")[0] || "Anonymous",
               bookerAvatar: user.avatar || "https://via.placeholder.com/40",
               bookedAt: booking.bookedAt,
             };
           })
         );
-        
+
         allBookings.push(...eventBookings);
       }
     }
-    
+
     // Sort by booking date (newest first)
     allBookings.sort((a, b) => new Date(b.bookedAt) - new Date(a.bookedAt));
-    
+
     res.status(200).json(allBookings);
   } catch (error) {
-    console.error("Error fetching user event bookings:", error.message, error.stack);
+    console.error(
+      "Error fetching user event bookings:",
+      error.message,
+      error.stack
+    );
     res.status(500).json({ error: "Failed to fetch user event bookings" });
   }
 };
@@ -506,14 +571,14 @@ const getUserEventBookings = async (req, res, next) => {
 const getUserBookings = async (req, res, next) => {
   try {
     const userId = req.user.uid;
-    
+
     // Get all events and find ones where this user has booked
     const eventsRef = database.ref("events");
     const snapshot = await eventsRef.once("value");
     const events = snapshot.val() || {};
-    
+
     const userBookings = [];
-    
+
     // For each event, check if the user has booked
     for (const [eventId, event] of Object.entries(events)) {
       if (event.bookings && event.bookings[userId]) {
@@ -522,7 +587,7 @@ const getUserBookings = async (req, res, next) => {
           .ref(`users/${event.authorId}`)
           .once("value");
         const organizer = organizerSnapshot.val() || {};
-        
+
         userBookings.push({
           eventId,
           eventTitle: event.title,
@@ -530,17 +595,20 @@ const getUserBookings = async (req, res, next) => {
           eventDescription: event.description,
           eventImage: event.image,
           organizerId: event.authorId,
-          organizerName: organizer.displayName || organizer.email?.split("@")[0] || "Event Organizer",
+          organizerName:
+            organizer.displayName ||
+            organizer.email?.split("@")[0] ||
+            "Event Organizer",
           organizerAvatar: organizer.avatar || "https://via.placeholder.com/40",
           bookedAt: booking.bookedAt,
-          bookingStatus: "confirmed"
+          bookingStatus: "confirmed",
         });
       }
     }
-    
+
     // Sort by booking date (newest first)
     userBookings.sort((a, b) => new Date(b.bookedAt) - new Date(a.bookedAt));
-    
+
     res.status(200).json(userBookings);
   } catch (error) {
     console.error("Error fetching user bookings:", error.message, error.stack);
@@ -552,19 +620,19 @@ const getUserBookings = async (req, res, next) => {
 const getCreatedEvents = async (req, res, next) => {
   try {
     const userId = req.user.uid;
-    
+
     // Get all events created by this user
     const eventsRef = database.ref("events");
     const snapshot = await eventsRef.once("value");
     const events = snapshot.val() || {};
-    
+
     const createdEvents = [];
-    
+
     // For each event, check if the user is the author
     for (const [eventId, event] of Object.entries(events)) {
       if (event.authorId === userId) {
         const eventBookings = [];
-        
+
         // Get all bookings for this event
         if (event.bookings) {
           for (const [bookerId, booking] of Object.entries(event.bookings)) {
@@ -572,20 +640,25 @@ const getCreatedEvents = async (req, res, next) => {
               .ref(`users/${bookerId}`)
               .once("value");
             const booker = bookerSnapshot.val() || {};
-            
+
             eventBookings.push({
               bookerId,
-              bookerName: booker.displayName || booker.email?.split("@")[0] || "Anonymous",
+              bookerName:
+                booker.displayName ||
+                booker.email?.split("@")[0] ||
+                "Anonymous",
               bookerAvatar: booker.avatar || "https://via.placeholder.com/40",
               bookedAt: booking.bookedAt,
-              bookingStatus: "confirmed"
+              bookingStatus: "confirmed",
             });
           }
         }
-        
+
         // Sort bookings by date (newest first)
-        eventBookings.sort((a, b) => new Date(b.bookedAt) - new Date(a.bookedAt));
-        
+        eventBookings.sort(
+          (a, b) => new Date(b.bookedAt) - new Date(a.bookedAt)
+        );
+
         createdEvents.push({
           eventId,
           eventTitle: event.title,
@@ -594,14 +667,14 @@ const getCreatedEvents = async (req, res, next) => {
           eventImage: event.image,
           createdAt: event.createdAt,
           maxAttendees: event.maxAttendees || 0,
-          bookings: eventBookings
+          bookings: eventBookings,
         });
       }
     }
-    
+
     // Sort events by creation date (newest first)
     createdEvents.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    
+
     res.status(200).json(createdEvents);
   } catch (error) {
     console.error("Error fetching created events:", error.message, error.stack);
@@ -628,13 +701,15 @@ const contactBooker = async (req, res, next) => {
     }
 
     if (event.authorId !== userId) {
-      return res.status(403).json({ error: "You can only contact bookers for your own events" });
+      return res
+        .status(403)
+        .json({ error: "You can only contact bookers for your own events" });
     }
 
     // Verify the booking exists
     const bookingRef = database.ref(`events/${eventId}/bookings/${bookerId}`);
     const bookingSnapshot = await bookingRef.once("value");
-    
+
     if (!bookingSnapshot.exists()) {
       return res.status(404).json({ error: "Booking not found" });
     }
@@ -654,14 +729,16 @@ const contactBooker = async (req, res, next) => {
     const messageData = {
       id: messageId,
       fromUserId: userId,
-      fromUserName: sender.displayName || sender.email?.split("@")[0] || "Event Organizer",
+      fromUserName:
+        sender.displayName || sender.email?.split("@")[0] || "Event Organizer",
       toUserId: bookerId,
-      toUserName: booker.displayName || booker.email?.split("@")[0] || "Event Booker",
+      toUserName:
+        booker.displayName || booker.email?.split("@")[0] || "Event Booker",
       eventId,
       eventTitle,
       message: message,
       sentAt: new Date().toISOString(),
-      read: false
+      read: false,
     };
 
     // Store in messages collection
@@ -675,12 +752,12 @@ const contactBooker = async (req, res, next) => {
       to: booker.email || bookerId,
       event: eventTitle,
       message: message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
 
-    res.status(200).json({ 
+    res.status(200).json({
       message: "Message sent successfully",
-      messageId: messageId
+      messageId: messageId,
     });
   } catch (error) {
     console.error("Error contacting booker:", error.message, error.stack);
@@ -960,7 +1037,9 @@ const likeEvent = async (req, res, next) => {
         likes: Math.max(0, (event.likes || 0) - 1),
         likedBy: updatedLikedBy,
       });
-      res.status(200).json({ liked: false, likes: Math.max(0, (event.likes || 0) - 1) });
+      res
+        .status(200)
+        .json({ liked: false, likes: Math.max(0, (event.likes || 0) - 1) });
     } else {
       // Like
       const updatedLikedBy = [...likedBy, userId];

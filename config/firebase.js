@@ -2,18 +2,41 @@ const admin = require("firebase-admin");
 const { initializeStorage, storageUtils } = require("./storageConfig");
 
 // Use environment variables for Firebase Admin SDK credentials
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+let serviceAccount;
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+  } else {
+    console.warn(
+      "⚠️ FIREBASE_SERVICE_ACCOUNT_JSON not set, using default credentials"
+    );
+    // Use default credentials (for local development)
+    serviceAccount = undefined;
+  }
+} catch (error) {
+  console.error(
+    "❌ Error parsing FIREBASE_SERVICE_ACCOUNT_JSON:",
+    error.message
+  );
+  serviceAccount = undefined;
+}
 
 try {
-  const app = admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
+  const appConfig = {
     databaseURL:
       process.env.FIREBASE_DATABASE_URL ||
       "https://gametibe2025-default-rtdb.firebaseio.com",
     storageBucket:
       process.env.FIREBASE_STORAGE_BUCKET ||
       "gasometibe2025.firebasestorage.app",
-  });
+  };
+
+  // Only add credential if serviceAccount is available
+  if (serviceAccount) {
+    appConfig.credential = admin.credential.cert(serviceAccount);
+  }
+
+  const app = admin.initializeApp(appConfig);
 
   const auth = admin.auth();
   const database = admin.database(); // Realtime Database
