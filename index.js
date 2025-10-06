@@ -48,6 +48,7 @@ const gamesRouter = require("./routes/games");
 const challengeRouter = require("./routes/challenges");
 const notificationRouter = require("./routes/notifications");
 const walletRouter = require("./routes/wallet");
+const messagesRouter = require("./routes/messages");
 
 const app = express();
 
@@ -173,6 +174,7 @@ app.use("/api/games", gamesRouter);
 app.use("/api/challenges", challengeRouter);
 app.use("/api/notifications", notificationRouter);
 app.use("/api/wallet", walletRouter);
+app.use("/api/messages", messagesRouter);
 
 // Add auth route for cross-platform authentication with conditional rate limiting
 app.use(
