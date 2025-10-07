@@ -164,17 +164,30 @@ router.delete(
       // Decrypt challenge data
       const challengeData = decryptData(challengeSnap.val(), ENCRYPTION_KEY);
 
-      // Validate user can cancel this challenge
-      if (challengeData.challengerId !== userId) {
+      // Validate user is a participant in this challenge
+      const isChallenger = challengeData.challengerId === userId;
+      const isChallenged = challengeData.challengedId === userId;
+
+      if (!isChallenger && !isChallenged) {
         return res.status(403).json({
-          error: "Unauthorized: Only the challenger can cancel this challenge",
+          error: "Unauthorized: You are not a participant in this challenge",
         });
       }
 
-      if (challengeData.status !== "pending") {
-        return res
-          .status(400)
-          .json({ error: "Challenge cannot be cancelled after acceptance" });
+      // Can cancel if: pending (challenger only) or accepted (both can cancel)
+      if (challengeData.status === "pending" && !isChallenger) {
+        return res.status(403).json({
+          error: "Only the challenger can cancel a pending challenge",
+        });
+      }
+
+      if (
+        challengeData.status !== "pending" &&
+        challengeData.status !== "accepted"
+      ) {
+        return res.status(400).json({
+          error: `Cannot cancel challenge with status: ${challengeData.status}`,
+        });
       }
 
       // Check if challenge has expired
@@ -182,37 +195,53 @@ router.delete(
         return res.status(400).json({ error: "Challenge has already expired" });
       }
 
-      // Refund challenger (minus service charge)
-      const serviceCharge = Math.round(challengeData.betAmount * (20 / 100));
-      const refundAmount = challengeData.betAmount - serviceCharge;
+      // Refund with 4% cancellation fee (96% refund)
+      const cancellationFee = Math.round(challengeData.betAmount * (4 / 100));
+      const refundAmount = challengeData.betAmount - cancellationFee;
 
-      // Get challenger's wallet
-      const challengerUserRef = ref(database, `users/${userId}`);
-      const challengerUserSnap = await get(challengerUserRef);
-      const challengerUser = challengerUserSnap.val();
-      const challengerWallet = challengerUser.wallet || {};
+      // For accepted challenges, refund both users. For pending, refund challenger only
+      const usersToRefund =
+        challengeData.status === "accepted"
+          ? [challengeData.challengerId, challengeData.challengedId]
+          : [challengeData.challengerId];
 
-      // Refund challenger
-      const challengerWalletUpdates = {
-        amount: (challengerWallet.amount || 0) + refundAmount,
-        escrowBalance:
-          (challengerWallet.escrowBalance || 0) - challengeData.betAmount,
-        lastTransaction: {
-          type: "challenge_cancelled_refund",
-          amount: refundAmount,
-          serviceCharge,
-          challengeId,
-          timestamp: Date.now(),
-        },
-      };
+      // Refund all applicable users
+      for (const userIdToRefund of usersToRefund) {
+        const userRef = ref(database, `users/${userIdToRefund}`);
+        const userSnap = await get(userRef);
+        const userData = userSnap.val();
+        const userWallet = userData.wallet || {};
+
+        const walletUpdates = {
+          amount: (userWallet.amount || 0) + refundAmount,
+          escrowBalance:
+            (userWallet.escrowBalance || 0) - challengeData.betAmount,
+          lastTransaction: {
+            type: "challenge_cancelled_refund",
+            amount: refundAmount,
+            cancellationFee,
+            challengeId,
+            timestamp: Date.now(),
+          },
+          updatedAt: new Date().toISOString(),
+        };
+
+        await update(userRef, {
+          wallet: {
+            ...userWallet,
+            ...walletUpdates,
+          },
+        });
+      }
 
       // Update challenge status
       const updatedChallengeData = {
         ...challengeData,
         status: "cancelled",
+        cancelledBy: userId,
         cancelledAt: Date.now(),
         refundAmount,
-        serviceCharge,
+        cancellationFee,
       };
 
       const encryptedUpdatedChallenge = encryptData(
@@ -220,14 +249,8 @@ router.delete(
         ENCRYPTION_KEY
       );
 
-      // Update challenge and wallet
+      // Update challenge in database
       await update(challengeRef, encryptedUpdatedChallenge);
-      await update(challengerUserRef, {
-        wallet: {
-          ...challengerWallet,
-          ...challengerWalletUpdates,
-        },
-      });
 
       // Remove challenge notification for challenged user
       const notificationRef = ref(
@@ -257,9 +280,12 @@ router.delete(
         challengeId,
         type: "challenge_cancelled",
         userId,
+        cancelledBy: userId,
+        challengeStatus: challengeData.status,
         amount: challengeData.betAmount,
         refundAmount,
-        serviceCharge,
+        cancellationFee,
+        usersRefunded: usersToRefund.length,
         timestamp: Date.now(),
         ip: req.ip,
         userAgent: req.get("User-Agent"),
@@ -270,11 +296,13 @@ router.delete(
 
       res.json({
         success: true,
-        message: "Challenge cancelled successfully",
+        message: `Challenge cancelled successfully. Refunded ${refundAmount} shillings (4% cancellation fee applied).`,
         data: {
           challengeId,
           refundAmount,
-          serviceCharge,
+          cancellationFee,
+          originalAmount: challengeData.betAmount,
+          usersRefunded: usersToRefund.length,
         },
       });
     } catch (error) {
