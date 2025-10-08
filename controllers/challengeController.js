@@ -763,39 +763,75 @@ const getChallengeHistory = async (req, res) => {
           let challengedAvatar = "";
 
           try {
-            // Get challenger user data
-            const challengerUserRef = ref(
+            // Get only specific fields from challenger user data to avoid circular refs
+            const challengerDisplayNameRef = ref(
               database,
-              `users/${challengeData.challengerId}`
+              `users/${challengeData.challengerId}/displayName`
             );
-            const challengerUserSnap = await get(challengerUserRef);
-            if (challengerUserSnap.exists()) {
-              const challengerUser = challengerUserSnap.val();
-              challengerName =
-                challengerUser.displayName ||
-                challengerUser.name ||
-                challengerUser.username ||
-                "Unknown Player";
-              challengerAvatar =
-                challengerUser.photoURL || challengerUser.avatar || "";
-            }
+            const challengerNameRef = ref(
+              database,
+              `users/${challengeData.challengerId}/name`
+            );
+            const challengerUsernameRef = ref(
+              database,
+              `users/${challengeData.challengerId}/username`
+            );
+            const challengerAvatarRef = ref(
+              database,
+              `users/${challengeData.challengerId}/photoURL`
+            );
 
-            // Get challenged user data
-            const challengedUserRef = ref(
+            const [displayNameSnap, nameSnap, usernameSnap, avatarSnap] =
+              await Promise.all([
+                get(challengerDisplayNameRef),
+                get(challengerNameRef),
+                get(challengerUsernameRef),
+                get(challengerAvatarRef),
+              ]);
+
+            challengerName =
+              displayNameSnap.val() ||
+              nameSnap.val() ||
+              usernameSnap.val() ||
+              "Unknown Player";
+            challengerAvatar = avatarSnap.val() || "";
+
+            // Get only specific fields from challenged user data to avoid circular refs
+            const challengedDisplayNameRef = ref(
               database,
-              `users/${challengeData.challengedId}`
+              `users/${challengeData.challengedId}/displayName`
             );
-            const challengedUserSnap = await get(challengedUserRef);
-            if (challengedUserSnap.exists()) {
-              const challengedUser = challengedUserSnap.val();
-              challengedName =
-                challengedUser.displayName ||
-                challengedUser.name ||
-                challengedUser.username ||
-                "Unknown Player";
-              challengedAvatar =
-                challengedUser.photoURL || challengedUser.avatar || "";
-            }
+            const challengedNameRef = ref(
+              database,
+              `users/${challengeData.challengedId}/name`
+            );
+            const challengedUsernameRef = ref(
+              database,
+              `users/${challengeData.challengedId}/username`
+            );
+            const challengedAvatarRef = ref(
+              database,
+              `users/${challengeData.challengedId}/photoURL`
+            );
+
+            const [
+              challengedDisplayNameSnap,
+              challengedNameSnap,
+              challengedUsernameSnap,
+              challengedAvatarSnap,
+            ] = await Promise.all([
+              get(challengedDisplayNameRef),
+              get(challengedNameRef),
+              get(challengedUsernameRef),
+              get(challengedAvatarRef),
+            ]);
+
+            challengedName =
+              challengedDisplayNameSnap.val() ||
+              challengedNameSnap.val() ||
+              challengedUsernameSnap.val() ||
+              "Unknown Player";
+            challengedAvatar = challengedAvatarSnap.val() || "";
           } catch (userError) {
             console.warn("Failed to fetch user data for challenge:", userError);
           }
