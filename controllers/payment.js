@@ -1330,15 +1330,20 @@ const getUserTransactions = async (req, res) => {
     if (type) {
       transactions = transactions.filter((tx) => {
         // For deposit type, include both M-Pesa and Stripe transactions
+        // Check BOTH 'method' and 'paymentMethod' fields for compatibility
         if (type === "deposit") {
           return (
             tx.type === "deposit" ||
+            tx.method === "stripe" ||
+            tx.method === "mpesa" ||
             tx.paymentMethod === "stripe" ||
             tx.paymentMethod === "mpesa"
           );
         }
-        // For other types, check both type and paymentMethod
-        return tx.type === type || tx.paymentMethod === type;
+        // For other types, check both type, method, and paymentMethod
+        return (
+          tx.type === type || tx.method === type || tx.paymentMethod === type
+        );
       });
     }
 
