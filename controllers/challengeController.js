@@ -275,9 +275,73 @@ const acceptChallenge = async (req, res) => {
       return res.status(400).json({ error: "Challenge is no longer pending" });
     }
 
-    // Check if challenge has expired
+    // Check if challenge has expired - auto-process expiration if so
     if (Date.now() > challengeData.expiresAt) {
-      return res.status(400).json({ error: "Challenge has expired" });
+      console.log(
+        `⏰ Challenge ${challengeId} has expired, processing expiration...`
+      );
+
+      // Calculate refund with 4% expiration fee
+      const expirationFee = Math.round(challengeData.betAmount * 0.04);
+      const refundAmount = challengeData.betAmount - expirationFee;
+
+      // Get challenger's wallet
+      const challengerUserRef = ref(
+        database,
+        `users/${challengeData.challengerId}`
+      );
+      const challengerUserSnap = await get(challengerUserRef);
+      const challengerUser = challengerUserSnap.val();
+      const challengerWallet = challengerUser.wallet || {};
+
+      // Refund challenger (minus 4% fee)
+      const walletUpdates = {
+        amount: (challengerWallet.amount || 0) + refundAmount,
+        escrowBalance:
+          (challengerWallet.escrowBalance || 0) - challengeData.betAmount,
+        lastTransaction: {
+          type: "challenge_expired_refund",
+          amount: refundAmount,
+          expirationFee,
+          challengeId,
+          timestamp: Date.now(),
+        },
+        updatedAt: new Date().toISOString(),
+      };
+
+      // Update challenge status to expired
+      const expiredChallengeData = {
+        ...challengeData,
+        status: "expired",
+        expiredAt: Date.now(),
+        refundAmount,
+        expirationFee,
+      };
+
+      const encryptedExpiredChallenge = encryptData(
+        expiredChallengeData,
+        ENCRYPTION_KEY
+      );
+
+      // Update both challenge and wallet
+      await update(challengeRef, encryptedExpiredChallenge);
+      await update(challengerUserRef, {
+        wallet: {
+          ...challengerWallet,
+          ...walletUpdates,
+        },
+      });
+
+      console.log(
+        `✅ Challenge ${challengeId} marked as expired, refunded ${refundAmount} shillings`
+      );
+
+      return res.status(400).json({
+        error: "Challenge has expired",
+        refundAmount,
+        expirationFee,
+        message: `Challenge expired. ${refundAmount} shillings refunded (4% expiration fee applied).`,
+      });
     }
 
     // Check challenged user's wallet balance

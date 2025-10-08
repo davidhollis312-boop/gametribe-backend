@@ -216,7 +216,9 @@ router.delete(
           escrowBalance:
             (userWallet.escrowBalance || 0) - challengeData.betAmount,
           lastTransaction: {
-            type: isExpiration ? "challenge_expired_refund" : "challenge_cancelled_refund",
+            type: isExpiration
+              ? "challenge_expired_refund"
+              : "challenge_cancelled_refund",
             amount: refundAmount,
             fee: fee,
             challengeId,
