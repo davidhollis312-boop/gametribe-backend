@@ -396,11 +396,9 @@ const rejectChallenge = async (req, res) => {
       return res.status(400).json({ error: "Challenge is no longer pending" });
     }
 
-    // Calculate refund amount (bet amount minus 20% service charge)
-    const serviceCharge = Math.round(
-      challengeData.betAmount * (SERVICE_CHARGE_PERCENTAGE / 100)
-    );
-    const refundAmount = challengeData.betAmount - serviceCharge;
+    // Calculate refund amount with 4% rejection fee (96% refund to challenger)
+    const rejectionFee = Math.round(challengeData.betAmount * 0.04); // 4%
+    const refundAmount = challengeData.betAmount - rejectionFee;
 
     // Get challenger's wallet
     const challengerUserRef = ref(
@@ -411,7 +409,7 @@ const rejectChallenge = async (req, res) => {
     const challengerUser = challengerUserSnap.val();
     const challengerWallet = challengerUser.wallet || {};
 
-    // Refund challenger (minus service charge)
+    // Refund challenger (minus 4% rejection fee)
     const challengerWalletUpdates = {
       amount: (challengerWallet.amount || 0) + refundAmount,
       escrowBalance:
@@ -419,10 +417,11 @@ const rejectChallenge = async (req, res) => {
       lastTransaction: {
         type: "challenge_rejected_refund",
         amount: refundAmount,
-        serviceCharge,
+        rejectionFee,
         challengeId,
         timestamp: Date.now(),
       },
+      updatedAt: new Date().toISOString(),
     };
 
     // Update challenge status
@@ -430,8 +429,9 @@ const rejectChallenge = async (req, res) => {
       ...challengeData,
       status: "rejected",
       rejectedAt: Date.now(),
+      rejectedBy: userId,
       refundAmount,
-      serviceCharge,
+      rejectionFee,
     };
 
     const encryptedUpdatedChallenge = encryptData(
@@ -455,7 +455,7 @@ const rejectChallenge = async (req, res) => {
       userId,
       amount: challengeData.betAmount,
       refundAmount,
-      serviceCharge,
+      rejectionFee,
       timestamp: Date.now(),
       ip: req.ip,
       userAgent: req.get("User-Agent"),
@@ -466,11 +466,12 @@ const rejectChallenge = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Challenge rejected successfully",
+      message: `Challenge rejected. Refunded ${refundAmount} shillings to challenger (4% rejection fee applied).`,
       data: {
         challengeId,
         refundAmount,
-        serviceCharge,
+        rejectionFee,
+        originalAmount: challengeData.betAmount,
       },
     });
   } catch (error) {
