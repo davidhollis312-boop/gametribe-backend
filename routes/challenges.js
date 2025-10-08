@@ -190,16 +190,15 @@ router.delete(
         });
       }
 
-      // Check if challenge has expired
-      if (Date.now() > challengeData.expiresAt) {
-        return res.status(400).json({ error: "Challenge has already expired" });
-      }
+      // Check if challenge has expired - if so, process as expired instead of cancelled
+      const hasExpired = Date.now() > challengeData.expiresAt;
+      const isExpiration = hasExpired && challengeData.status === "pending";
 
-      // Refund with 4% cancellation fee (96% refund)
-      const cancellationFee = Math.round(challengeData.betAmount * (4 / 100));
-      const refundAmount = challengeData.betAmount - cancellationFee;
+      // Refund with 4% fee (96% refund) - same for both cancellation and expiration
+      const fee = Math.round(challengeData.betAmount * (4 / 100));
+      const refundAmount = challengeData.betAmount - fee;
 
-      // For accepted challenges, refund both users. For pending, refund challenger only
+      // For accepted challenges, refund both users. For pending/expired, refund challenger only
       const usersToRefund =
         challengeData.status === "accepted"
           ? [challengeData.challengerId, challengeData.challengedId]
@@ -217,9 +216,9 @@ router.delete(
           escrowBalance:
             (userWallet.escrowBalance || 0) - challengeData.betAmount,
           lastTransaction: {
-            type: "challenge_cancelled_refund",
+            type: isExpiration ? "challenge_expired_refund" : "challenge_cancelled_refund",
             amount: refundAmount,
-            cancellationFee,
+            fee: fee,
             challengeId,
             timestamp: Date.now(),
           },
@@ -234,14 +233,15 @@ router.delete(
         });
       }
 
-      // Update challenge status
+      // Update challenge status - mark as expired if it has expired, otherwise cancelled
       const updatedChallengeData = {
         ...challengeData,
-        status: "cancelled",
+        status: isExpiration ? "expired" : "cancelled",
         cancelledBy: userId,
         cancelledAt: Date.now(),
         refundAmount,
-        cancellationFee,
+        cancellationFee: fee,
+        ...(isExpiration && { expiredAt: Date.now() }),
       };
 
       const encryptedUpdatedChallenge = encryptData(
@@ -278,14 +278,15 @@ router.delete(
       // Log transaction for audit
       const auditLog = {
         challengeId,
-        type: "challenge_cancelled",
+        type: isExpiration ? "challenge_expired" : "challenge_cancelled",
         userId,
         cancelledBy: userId,
         challengeStatus: challengeData.status,
         amount: challengeData.betAmount,
         refundAmount,
-        cancellationFee,
+        cancellationFee: fee,
         usersRefunded: usersToRefund.length,
+        isExpiration,
         timestamp: Date.now(),
         ip: req.ip,
         userAgent: req.get("User-Agent"),
@@ -294,15 +295,20 @@ router.delete(
       const auditRef = ref(database, `auditLogs/challenges/${challengeId}`);
       await update(auditRef, auditLog);
 
+      const message = isExpiration
+        ? `Challenge expired. Refunded ${refundAmount} shillings (4% expiration fee applied).`
+        : `Challenge cancelled successfully. Refunded ${refundAmount} shillings (4% cancellation fee applied).`;
+
       res.json({
         success: true,
-        message: `Challenge cancelled successfully. Refunded ${refundAmount} shillings (4% cancellation fee applied).`,
+        message,
         data: {
           challengeId,
           refundAmount,
-          cancellationFee,
+          cancellationFee: fee,
           originalAmount: challengeData.betAmount,
           usersRefunded: usersToRefund.length,
+          isExpiration,
         },
       });
     } catch (error) {

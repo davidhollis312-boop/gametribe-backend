@@ -219,6 +219,9 @@ const getStripeTransactionStatus = async (req, res) => {
 
 // Generate M-Pesa OAuth token
 const getMpesaToken = async () => {
+  // Define baseUrl outside try block so it's available in error handler
+  let baseUrl = "https://sandbox.safaricom.co.ke"; // Default
+
   try {
     if (!mpesaConfig) {
       throw new Error("M-Pesa configuration not available");
@@ -228,7 +231,7 @@ const getMpesaToken = async () => {
       `${mpesaConfig.consumerKey}:${mpesaConfig.consumerSecret}`
     ).toString("base64");
 
-    const baseUrl =
+    baseUrl =
       mpesaConfig.environment === "production"
         ? "https://api.safaricom.co.ke"
         : "https://sandbox.safaricom.co.ke";
@@ -254,8 +257,8 @@ const getMpesaToken = async () => {
       statusText: error.response?.statusText,
       data: error.response?.data,
       baseUrl,
-      consumerKey: mpesaConfig.consumerKey,
-      environment: mpesaConfig.environment,
+      consumerKey: mpesaConfig?.consumerKey || "not set",
+      environment: mpesaConfig?.environment || "not set",
       stack: error.stack,
     });
     throw new Error("Failed to generate M-Pesa token");
