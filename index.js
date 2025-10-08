@@ -466,16 +466,18 @@ app.use((err, req, res, next) => {
 // Add file validation error handler
 app.use(handleFileValidationError);
 
-const PORT = process.env.PORT || 5000;
+// Use PORT from environment (Cloud Run sets this) or default to 8080
+const PORT = process.env.PORT || 8080;
 
 // Start server
 const startServer = async () => {
   try {
-    // Start server
-    app.listen(PORT, () => {
+    // Start server - Use 0.0.0.0 for Cloud Run compatibility
+    app.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`🗄️ Database: Firebase (default)`);
       console.log(`💾 Cache: In-memory (efficient)`);
+      console.log(`🌐 Environment: ${process.env.NODE_ENV || "development"}`);
     });
   } catch (error) {
     console.error("❌ Failed to start server:", error);
