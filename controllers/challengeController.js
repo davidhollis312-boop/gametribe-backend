@@ -39,7 +39,7 @@ const createChallenge = async (req, res) => {
       challengerId,
       challengedId,
       gameId,
-      betAmount,
+      wageAmount,
       gameTitle,
       gameImage,
     } = req.body;
@@ -149,7 +149,7 @@ const createChallenge = async (req, res) => {
       gameId,
       gameTitle,
       gameImage,
-      betAmount,
+      wageAmount,
       status: "pending", // pending, accepted, completed, rejected, cancelled
       createdAt: Date.now(),
       expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
@@ -199,7 +199,7 @@ const createChallenge = async (req, res) => {
       fromUserName: req.user.displayName || req.user.email?.split("@")[0],
       fromUserAvatar: req.user.photoURL || "",
       gameTitle,
-      betAmount,
+      wageAmount,
       timestamp: Date.now(),
       read: false,
     };
@@ -230,7 +230,7 @@ const createChallenge = async (req, res) => {
       message: "Challenge created successfully",
       data: {
         challengeId,
-        betAmount,
+        wageAmount,
         gameTitle,
         challengedUserName:
           challengedUser.displayName || challengedUser.email?.split("@")[0],
@@ -688,7 +688,7 @@ const processChallengeCompletion = async (challengeData) => {
     const {
       challengerId,
       challengedId,
-      betAmount,
+      wageAmount,
       serviceCharge,
       netPrize,
       winnerId,

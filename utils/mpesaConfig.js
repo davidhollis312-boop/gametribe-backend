@@ -46,9 +46,7 @@ const getMpesaConfig = () => {
     shortcode: process.env.MPESA_SHORTCODE,
     passkey: process.env.MPESA_PASSKEY,
     callbackUrl: process.env.MPESA_CALLBACK_URL,
-    environment:
-      process.env.MPESA_ENVIRONMENT ||
-      (process.env.NODE_ENV === "production" ? "production" : "sandbox"),
+    environment: process.env.MPESA_ENVIRONMENT,
   };
 };
 

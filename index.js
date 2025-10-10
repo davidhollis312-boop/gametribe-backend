@@ -466,14 +466,14 @@ app.use((err, req, res, next) => {
 // Add file validation error handler
 app.use(handleFileValidationError);
 
-// Use PORT from environment (Cloud Run sets this) or default to 8080
-const PORT = process.env.PORT || 8080;
+// Use PORT from environment (Vercel sets this) or default to 5000
+const PORT = process.env.PORT || 5000;
 
 // Start server
 const startServer = async () => {
   try {
-    // Start server - Use 0.0.0.0 for Cloud Run compatibility
-    app.listen(PORT, "0.0.0.0", () => {
+    // Start server
+    app.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`🗄️ Database: Firebase (default)`);
       console.log(`💾 Cache: In-memory (efficient)`);

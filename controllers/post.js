@@ -231,6 +231,10 @@ const getPosts = async (req, res) => {
 
     posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
+    // ✅ Filter out deleted posts before any other filtering
+    posts = posts.filter((post) => !post.isDeleted);
+    console.log("🔍 Posts after removing deleted posts:", posts.length);
+
     // ✅ NEW: Apply filters first
     if (category) {
       console.log("🔍 Filtering posts by category:", category);
