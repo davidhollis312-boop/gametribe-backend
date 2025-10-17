@@ -1,4 +1,5 @@
 const { database } = require("../config/firebase");
+const { ref, set, get, update } = require("firebase/database");
 const { cache, cacheKeys, CACHE_TTL } = require("../utils/cache");
 
 // Simple in-memory rate limiter for presence sync
@@ -338,12 +339,15 @@ const syncPresence = async (req, res) => {
 
     // Use Promise.all to write to both locations simultaneously but handle errors separately
     try {
-      const presenceRef = database.ref(`presence/${userId}`);
-      const userStatusRef = database.ref(`users/${userId}/onlineStatus`);
+      // Ensure userId is a string
+      const userIdStr = String(userId);
+
+      const presenceRef = ref(database, `presence/${userIdStr}`);
+      const userStatusRef = ref(database, `users/${userIdStr}/onlineStatus`);
 
       await Promise.all([
-        presenceRef.set(presenceData),
-        userStatusRef.set(presenceData),
+        set(presenceRef, presenceData),
+        set(userStatusRef, presenceData),
       ]);
 
       console.log("✅ Presence synced successfully for user:", userId);
@@ -359,7 +363,9 @@ const syncPresence = async (req, res) => {
           isOnline: onlineStatus,
           lastActive: Date.now(), // Use timestamp instead of ISO string
         };
-        await database.ref(`presence/${userId}`).set(simpleData);
+        const userIdStr = String(userId);
+        const fallbackRef = ref(database, `presence/${userIdStr}`);
+        await set(fallbackRef, simpleData);
         console.log("✅ Fallback presence sync successful for user:", userId);
         return res.status(200).json({ message: "Presence synced (fallback)" });
       } catch (fallbackError) {

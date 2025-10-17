@@ -39,7 +39,7 @@ const createChallenge = async (req, res) => {
       challengerId,
       challengedId,
       gameId,
-      wageAmount,
+      betAmount,
       gameTitle,
       gameImage,
     } = req.body;
@@ -142,6 +142,7 @@ const createChallenge = async (req, res) => {
     const challengeId = generateChallengeId();
 
     // Create encrypted challenge data
+    const totalPot = betAmount * 2;
     const challengeData = {
       challengeId,
       challengerId,
@@ -149,18 +150,16 @@ const createChallenge = async (req, res) => {
       gameId,
       gameTitle,
       gameImage,
-      wageAmount,
+      betAmount,
       status: "pending", // pending, accepted, completed, rejected, cancelled
       createdAt: Date.now(),
       expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
       challengerScore: null,
       challengedScore: null,
       winnerId: null,
-      serviceCharge: Math.round(betAmount * (SERVICE_CHARGE_PERCENTAGE / 100)),
-      totalPrize: betAmount * 2, // Total amount to be won
-      netPrize:
-        betAmount * 2 -
-        Math.round(betAmount * (SERVICE_CHARGE_PERCENTAGE / 100)),
+      serviceCharge: Math.round(totalPot * 0.2), // 20% of total pot
+      totalPrize: totalPot, // Total amount in pot
+      netPrize: Math.round(totalPot * 0.8), // Winner gets 80% of total pot
     };
 
     // Encrypt sensitive challenge data
@@ -199,7 +198,7 @@ const createChallenge = async (req, res) => {
       fromUserName: req.user.displayName || req.user.email?.split("@")[0],
       fromUserAvatar: req.user.photoURL || "",
       gameTitle,
-      wageAmount,
+      betAmount,
       timestamp: Date.now(),
       read: false,
     };
@@ -230,7 +229,7 @@ const createChallenge = async (req, res) => {
       message: "Challenge created successfully",
       data: {
         challengeId,
-        wageAmount,
+        betAmount,
         gameTitle,
         challengedUserName:
           challengedUser.displayName || challengedUser.email?.split("@")[0],
@@ -688,7 +687,7 @@ const processChallengeCompletion = async (challengeData) => {
     const {
       challengerId,
       challengedId,
-      wageAmount,
+      betAmount,
       serviceCharge,
       netPrize,
       winnerId,
@@ -717,39 +716,44 @@ const processChallengeCompletion = async (challengeData) => {
     };
 
     if (winnerId) {
-      // There's a winner
+      // There's a winner - gets total pot (both bets) minus 20% service charge
+      const totalPot = betAmount * 2;
+      const winnerPrize = Math.round(totalPot * 0.8); // 80% of total pot
+      const serviceChargeTaken = totalPot - winnerPrize;
+
       if (winnerId === challengerId) {
         challengerWalletUpdates.amount =
-          (challengerWallet.amount || 0) + netPrize;
+          (challengerWallet.amount || 0) + winnerPrize;
         challengerWalletUpdates.lastTransaction = {
           type: "challenge_win",
-          amount: netPrize,
+          amount: winnerPrize,
+          serviceCharge: serviceChargeTaken,
           challengeId: challengeData.challengeId,
           timestamp: Date.now(),
         };
       } else {
         challengedWalletUpdates.amount =
-          (challengedWallet.amount || 0) + netPrize;
+          (challengedWallet.amount || 0) + winnerPrize;
         challengedWalletUpdates.lastTransaction = {
           type: "challenge_win",
-          amount: netPrize,
+          amount: winnerPrize,
+          serviceCharge: serviceChargeTaken,
           challengeId: challengeData.challengeId,
           timestamp: Date.now(),
         };
       }
     } else {
-      // Tie - refund both users minus service charge
-      const refundAmount =
-        betAmount - Math.round(betAmount * (SERVICE_CHARGE_PERCENTAGE / 100));
+      // Tie - refund both users minus 4% service charge each
+      const tieFeePercentage = 0.04; // 4% for ties
+      const refundAmount = Math.round(betAmount * (1 - tieFeePercentage));
+      const serviceChargeTaken = betAmount - refundAmount;
 
       challengerWalletUpdates.amount =
         (challengerWallet.amount || 0) + refundAmount;
       challengerWalletUpdates.lastTransaction = {
         type: "challenge_tie_refund",
         amount: refundAmount,
-        serviceCharge: Math.round(
-          betAmount * (SERVICE_CHARGE_PERCENTAGE / 100)
-        ),
+        serviceCharge: serviceChargeTaken,
         challengeId: challengeData.challengeId,
         timestamp: Date.now(),
       };
@@ -759,9 +763,7 @@ const processChallengeCompletion = async (challengeData) => {
       challengedWalletUpdates.lastTransaction = {
         type: "challenge_tie_refund",
         amount: refundAmount,
-        serviceCharge: Math.round(
-          betAmount * (SERVICE_CHARGE_PERCENTAGE / 100)
-        ),
+        serviceCharge: serviceChargeTaken,
         challengeId: challengeData.challengeId,
         timestamp: Date.now(),
       };
@@ -793,122 +795,51 @@ const processChallengeCompletion = async (challengeData) => {
 };
 
 /**
- * Get user's challenge history
+ * Get user's challenge history (OPTIMIZED)
  */
 const getChallengeHistory = async (req, res) => {
   try {
     const userId = req.user.uid;
-    const { limit = 10, offset = 0 } = req.query;
+    const { limit = 50, offset = 0 } = req.query;
+
+    console.log(`🔍 Fetching challenges for user: ${userId}`);
+    const startTime = Date.now();
 
     // Get user's challenges (both as challenger and challenged)
     const challengesRef = ref(database, "secureChallenges");
     const challengesSnap = await get(challengesRef);
 
     if (!challengesSnap.exists()) {
-      return res.json({ success: true, challenges: [] });
+      return res.json({ success: true, data: [], total: 0, hasMore: false });
     }
 
     const allChallenges = challengesSnap.val();
     const userChallenges = [];
+    const uniqueUserIds = new Set();
 
-    // Decrypt and filter user's challenges
+    // OPTIMIZATION 1: Decrypt only and filter early
+    console.log(
+      `📦 Total challenges in DB: ${Object.keys(allChallenges).length}`
+    );
+
     for (const [challengeId, encryptedData] of Object.entries(allChallenges)) {
       try {
         const challengeData = decryptData(encryptedData, ENCRYPTION_KEY);
 
+        // Filter early - only process user's challenges
         if (
           challengeData.challengerId === userId ||
           challengeData.challengedId === userId
         ) {
-          // Get opponent user data for display names and avatars
-          let challengerName = "Unknown Player";
-          let challengedName = "Unknown Player";
-          let challengerAvatar = "";
-          let challengedAvatar = "";
+          // Collect unique user IDs for batch fetching
+          uniqueUserIds.add(challengeData.challengerId);
+          uniqueUserIds.add(challengeData.challengedId);
 
-          try {
-            // Get only specific fields from challenger user data to avoid circular refs
-            const challengerDisplayNameRef = ref(
-              database,
-              `users/${challengeData.challengerId}/displayName`
-            );
-            const challengerNameRef = ref(
-              database,
-              `users/${challengeData.challengerId}/name`
-            );
-            const challengerUsernameRef = ref(
-              database,
-              `users/${challengeData.challengerId}/username`
-            );
-            const challengerAvatarRef = ref(
-              database,
-              `users/${challengeData.challengerId}/photoURL`
-            );
-
-            const [displayNameSnap, nameSnap, usernameSnap, avatarSnap] =
-              await Promise.all([
-                get(challengerDisplayNameRef),
-                get(challengerNameRef),
-                get(challengerUsernameRef),
-                get(challengerAvatarRef),
-              ]);
-
-            challengerName =
-              displayNameSnap.val() ||
-              nameSnap.val() ||
-              usernameSnap.val() ||
-              "Unknown Player";
-            challengerAvatar = avatarSnap.val() || "";
-
-            // Get only specific fields from challenged user data to avoid circular refs
-            const challengedDisplayNameRef = ref(
-              database,
-              `users/${challengeData.challengedId}/displayName`
-            );
-            const challengedNameRef = ref(
-              database,
-              `users/${challengeData.challengedId}/name`
-            );
-            const challengedUsernameRef = ref(
-              database,
-              `users/${challengeData.challengedId}/username`
-            );
-            const challengedAvatarRef = ref(
-              database,
-              `users/${challengeData.challengedId}/photoURL`
-            );
-
-            const [
-              challengedDisplayNameSnap,
-              challengedNameSnap,
-              challengedUsernameSnap,
-              challengedAvatarSnap,
-            ] = await Promise.all([
-              get(challengedDisplayNameRef),
-              get(challengedNameRef),
-              get(challengedUsernameRef),
-              get(challengedAvatarRef),
-            ]);
-
-            challengedName =
-              challengedDisplayNameSnap.val() ||
-              challengedNameSnap.val() ||
-              challengedUsernameSnap.val() ||
-              "Unknown Player";
-            challengedAvatar = challengedAvatarSnap.val() || "";
-          } catch (userError) {
-            console.warn("Failed to fetch user data for challenge:", userError);
-          }
-
-          // Remove sensitive data for response
-          const safeChallengeData = {
+          // Store minimal challenge data
+          userChallenges.push({
             challengeId: challengeData.challengeId,
             challengerId: challengeData.challengerId,
             challengedId: challengeData.challengedId,
-            challengerName,
-            challengedName,
-            challengerAvatar,
-            challengedAvatar,
             gameId: challengeData.gameId,
             gameTitle: challengeData.gameTitle,
             gameImage: challengeData.gameImage,
@@ -924,27 +855,85 @@ const getChallengeHistory = async (req, res) => {
               challengeData.challengerId === userId
                 ? challengeData.challengedId
                 : challengeData.challengerId,
-          };
-
-          userChallenges.push(safeChallengeData);
+          });
         }
       } catch (decryptError) {
         console.warn(
           `Failed to decrypt challenge ${challengeId}:`,
-          decryptError
+          decryptError.message
         );
       }
     }
 
+    console.log(`✅ User has ${userChallenges.length} challenges`);
+    console.log(`👥 Unique users to fetch: ${uniqueUserIds.size}`);
+
+    // OPTIMIZATION 2: Batch fetch only specific user fields (avoid circular references)
+    const userDataMap = {};
+
+    if (uniqueUserIds.size > 0) {
+      const userDataPromises = Array.from(uniqueUserIds).map(async (uid) => {
+        try {
+          // Fetch only specific fields to avoid circular references and large data
+          const displayNameRef = ref(database, `users/${uid}/displayName`);
+          const usernameRef = ref(database, `users/${uid}/username`);
+          const photoURLRef = ref(database, `users/${uid}/photoURL`);
+
+          const [displayNameSnap, usernameSnap, photoURLSnap] =
+            await Promise.all([
+              get(displayNameRef),
+              get(usernameRef),
+              get(photoURLRef),
+            ]);
+
+          return {
+            uid,
+            displayName: displayNameSnap.val() || usernameSnap.val() || null,
+            photoURL: photoURLSnap.val() || "",
+          };
+        } catch (error) {
+          console.warn(`Failed to fetch user ${uid}:`, error.message);
+          return { uid, displayName: null, photoURL: "" };
+        }
+      });
+
+      const usersData = await Promise.all(userDataPromises);
+      usersData.forEach((user) => {
+        userDataMap[user.uid] = user;
+      });
+    }
+
+    console.log(`✅ Fetched ${Object.keys(userDataMap).length} user profiles`);
+
+    // OPTIMIZATION 3: Enrich challenges with user data
+    const enrichedChallenges = userChallenges.map((challenge) => {
+      const challengerData = userDataMap[challenge.challengerId] || {};
+      const challengedData = userDataMap[challenge.challengedId] || {};
+
+      return {
+        ...challenge,
+        challengerName: challengerData.displayName || "Unknown Player",
+        challengedName: challengedData.displayName || "Unknown Player",
+        challengerAvatar: challengerData.photoURL || "",
+        challengedAvatar: challengedData.photoURL || "",
+      };
+    });
+
     // Sort by creation date (newest first) and paginate
-    userChallenges.sort((a, b) => b.createdAt - a.createdAt);
-    const paginatedChallenges = userChallenges.slice(offset, offset + limit);
+    enrichedChallenges.sort((a, b) => b.createdAt - a.createdAt);
+    const paginatedChallenges = enrichedChallenges.slice(
+      parseInt(offset),
+      parseInt(offset) + parseInt(limit)
+    );
+
+    const elapsed = Date.now() - startTime;
+    console.log(`⚡ Challenge fetch completed in ${elapsed}ms`);
 
     res.json({
       success: true,
-      challenges: paginatedChallenges,
-      total: userChallenges.length,
-      hasMore: userChallenges.length > offset + limit,
+      data: paginatedChallenges,
+      total: enrichedChallenges.length,
+      hasMore: enrichedChallenges.length > parseInt(offset) + parseInt(limit),
     });
   } catch (error) {
     console.error("Error getting challenge history:", error);
