@@ -1,16 +1,14 @@
 const admin = require("firebase-admin");
 const { initializeStorage, storageUtils } = require("./storageConfig");
 
-// Use environment variables for Firebase Admin SDK credentials
+// Use environment variables for Firebase Admin SDK credentials (ONLY from .env)
 let serviceAccount;
 try {
   if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
     serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+    console.log("✅ Loaded service account from .env");
   } else {
-    console.warn(
-      "⚠️ FIREBASE_SERVICE_ACCOUNT_JSON not set, using default credentials"
-    );
-    // Use default credentials (for local development)
+    console.warn("⚠️ FIREBASE_SERVICE_ACCOUNT_JSON not set in .env");
     serviceAccount = undefined;
   }
 } catch (error) {
