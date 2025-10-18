@@ -667,7 +667,7 @@ const processStripeEvent = async (event, res) => {
           );
 
           const updateData = {
-            points: currentPoints + points,
+            // Points are NOT updated - only earned through social actions
             wallet: {
               amount: currentWallet.amount + points,
               currency: "KES",
@@ -677,15 +677,22 @@ const processStripeEvent = async (event, res) => {
 
           console.log("💾 Backend: Updating user with data:", updateData);
           await updateWithRetry(userRef, updateData);
-          console.log("✅ Backend: User update completed successfully");
+          console.log(
+            "✅ Backend: User wallet updated successfully (points NOT affected)"
+          );
 
-          // Record points history entry
-          const historyId = `deposit_stripe_checkout_${checkoutTransactionId}`;
+          // Record wallet transaction history (NOT points history)
+          const transactionHistoryId = `deposit_stripe_checkout_${checkoutTransactionId}`;
           await updateWithRetry(
-            ref(database, `pointsHistory/${userId}/${historyId}`),
+            ref(
+              database,
+              `users/${userId}/wallet/transactions/${transactionHistoryId}`
+            ),
             {
-              id: historyId,
-              points: points,
+              id: transactionHistoryId,
+              amount: points,
+              type: "deposit",
+              method: "stripe",
               reason: "DEPOSIT_STRIPE_CHECKOUT",
               metadata: {
                 checkoutSessionId: checkoutSession.id,
@@ -694,8 +701,8 @@ const processStripeEvent = async (event, res) => {
                 currency: checkoutSession.currency,
               },
               timestamp: new Date().toISOString(),
-              previousPoints: currentPoints,
-              newPoints: currentPoints + points,
+              previousBalance: currentWallet.amount,
+              newBalance: currentWallet.amount + points,
             }
           );
 
@@ -1177,7 +1184,7 @@ const mpesaWebhook = async (req, res) => {
         });
 
         await updateWithRetry(userRef, {
-          points: currentPoints + pointsToAdd,
+          // Points are NOT updated - only earned through social actions
           wallet: {
             amount: (currentWallet.amount || 0) + pointsToAdd,
             currency: "KES",
@@ -1187,15 +1194,20 @@ const mpesaWebhook = async (req, res) => {
         });
 
         console.log(
-          "✅ Successfully updated user points and wallet for M-Pesa payment"
+          "✅ Successfully updated user wallet for M-Pesa payment (points NOT affected)"
         );
 
-        const historyId = `deposit_mpesa_${transactionId}`;
+        const transactionHistoryId = `deposit_mpesa_${transactionId}`;
         await updateWithRetry(
-          ref(database, `pointsHistory/${transaction.userId}/${historyId}`),
+          ref(
+            database,
+            `users/${transaction.userId}/wallet/transactions/${transactionHistoryId}`
+          ),
           {
-            id: historyId,
-            points: pointsToAdd,
+            id: transactionHistoryId,
+            amount: pointsToAdd,
+            type: "deposit",
+            method: "mpesa",
             reason: "DEPOSIT_MPESA",
             metadata: {
               checkoutRequestId: CheckoutRequestID,
@@ -1204,10 +1216,8 @@ const mpesaWebhook = async (req, res) => {
               currency: transaction.currency,
             },
             timestamp: new Date().toISOString(),
-            previousPoints: currentPoints,
-            newPoints: currentPoints + pointsToAdd,
-            previousWalletAmount: currentWallet.amount || 0,
-            newWalletAmount: (currentWallet.amount || 0) + pointsToAdd,
+            previousBalance: currentWallet.amount || 0,
+            newBalance: (currentWallet.amount || 0) + pointsToAdd,
           }
         );
       } else {
@@ -1246,65 +1256,16 @@ const mpesaWebhook = async (req, res) => {
   }
 };
 
-// Convert existing wallet balance to points
+// REMOVED: Wallet-to-points conversion feature
+// Points and wallet are now completely separate systems
+// Points = Earned through social actions only
+// Wallet = Purchased with real money, used for challenges only
 const convertWalletToPoints = async (req, res) => {
-  const { userId } = req.body;
-
-  if (!userId || typeof userId !== "string") {
-    return res.status(400).json({ error: "Valid userId required" });
-  }
-  if (userId !== req.user.uid) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-
-  try {
-    const userRef = ref(database, `users/${userId}`);
-    const snapshot = await get(userRef);
-    if (!snapshot.exists()) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    const userData = snapshot.val();
-    if (userData.pointsConverted) {
-      return res
-        .status(200)
-        .json({ message: "Wallet already converted to points" });
-    }
-
-    const { amount, currency } = userData.wallet || {
-      amount: 0,
-      currency: "KES",
-    };
-    if (amount <= 0) {
-      return res.status(200).json({ message: "No wallet balance to convert" });
-    }
-
-    const pointsToAdd = Math.round(amount);
-
-    await updateWithRetry(userRef, {
-      points: (userData.points || 0) + pointsToAdd,
-      wallet: { amount: 0, currency: "KES" },
-      pointsConverted: true,
-      updatedAt: new Date().toISOString(),
-    });
-
-    return res.status(200).json({
-      message: `Converted ${amount} ${currency} to ${pointsToAdd} points`,
-    });
-  } catch (error) {
-    console.error("Error converting wallet to points:", {
-      message: error.message,
-      stack: error.stack,
-    });
-    await updateWithRetry(ref(database, `webhook_errors/wallet_${uuidv4()}`), {
-      error: `Failed to convert wallet: ${error.message}`,
-      userId,
-      timestamp: new Date().toISOString(),
-    });
-    return res
-      .status(500)
-      .json({ error: "Failed to convert wallet to points" });
-  }
+  return res.status(410).json({
+    error: "Feature removed: Wallet and points are now separate systems",
+    message:
+      "Points can only be earned through social actions. Wallet is used for challenges.",
+  });
 };
 
 // Get user transactions

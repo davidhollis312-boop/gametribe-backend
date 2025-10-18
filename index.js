@@ -80,18 +80,35 @@ const checkRateLimit = (ip) => {
 // upload is already imported from fileValidator middleware
 
 // Apply CORS
-app.use(
-  cors({
-    origin: [
+const allowedOrigins = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : [
       // Development URLs
       "http://localhost:5173",
       "http://localhost:5174",
       "http://localhost:5000",
-      // Production URLs (commented out for development)
+      // Production URLs
       "https://hub.gametribe.com",
       "https://gametribe.com",
       "https://gt-server-mu.vercel.app",
-    ],
+    ];
+
+console.log('🌐 CORS Allowed Origins:', allowedOrigins);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps or curl requests)
+      if (!origin) return callback(null, true);
+      
+      if (allowedOrigins.includes(origin)) {
+        console.log('✅ CORS: Origin allowed:', origin);
+        return callback(null, true);
+      } else {
+        console.log('❌ CORS: Origin blocked:', origin);
+        return callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: [
