@@ -69,12 +69,11 @@ const createChallenge = async (req, res) => {
     }
 
     const challengerWallet = challengerUser.wallet;
-    const challengerBalance =
-      challengerWallet?.amount || challengerUser.points || 0;
+    const challengerBalance = challengerWallet?.amount || 0;
 
     if (challengerBalance < betAmount) {
       return res.status(400).json({
-        error: "Insufficient wallet balance",
+        error: "Insufficient wallet balance. Please add funds to your wallet.",
       });
     }
 
@@ -88,12 +87,12 @@ const createChallenge = async (req, res) => {
     }
 
     const challengedWallet = challengedUser.wallet;
-    const challengedBalance =
-      challengedWallet?.amount || challengedUser.points || 0;
+    const challengedBalance = challengedWallet?.amount || 0;
 
     if (challengedBalance < betAmount) {
       return res.status(400).json({
-        error: "Challenged user has insufficient wallet balance",
+        error:
+          "Challenged user has insufficient wallet balance. They need to add funds first.",
       });
     }
 
@@ -353,13 +352,15 @@ const acceptChallenge = async (req, res) => {
     }
 
     const challengedWallet = challengedUser.wallet || {};
-    const challengedBalance =
-      challengedWallet.amount || challengedUser.points || 0;
+    const challengedBalance = challengedWallet.amount || 0;
 
     if (challengedBalance < challengeData.betAmount) {
       return res
         .status(400)
-        .json({ error: "Insufficient wallet balance to accept challenge" });
+        .json({
+          error:
+            "Insufficient wallet balance to accept challenge. Please add funds to your wallet.",
+        });
     }
 
     // Deduct bet amount from challenged user's wallet (hold in escrow)
