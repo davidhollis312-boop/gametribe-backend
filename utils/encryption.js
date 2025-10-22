@@ -62,8 +62,23 @@ const encryptData = (data, password) => {
  */
 const decryptData = (encryptedData, password) => {
   try {
+    console.log("Decrypting data:", typeof encryptedData, encryptedData);
+
     if (typeof encryptedData === "string") {
       encryptedData = JSON.parse(encryptedData);
+    }
+
+    // Check if encryptedData has the expected structure
+    if (!encryptedData || typeof encryptedData !== "object") {
+      throw new Error("Invalid encrypted data format");
+    }
+
+    if (!encryptedData.salt || !encryptedData.iv || !encryptedData.data) {
+      console.error(
+        "Missing required fields in encrypted data:",
+        Object.keys(encryptedData)
+      );
+      throw new Error("Missing required encryption fields");
     }
 
     // Extract components
@@ -84,7 +99,8 @@ const decryptData = (encryptedData, password) => {
     return JSON.parse(decrypted);
   } catch (error) {
     console.error("Decryption error:", error);
-    throw new Error("Failed to decrypt data");
+    console.error("Encrypted data structure:", encryptedData);
+    throw new Error(`Failed to decrypt data: ${error.message}`);
   }
 };
 
