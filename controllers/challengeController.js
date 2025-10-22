@@ -51,7 +51,7 @@ const MAXIMUM_BET_AMOUNT = 10000; // 10,000 shillings maximum
 
 // Game session management (for score verification)
 const gameSessions = new Map();
-const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+const SESSION_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours (increased from 30 minutes)
 
 // Maximum scores per game (anti-cheat)
 const MAX_SCORES_PER_GAME = {
@@ -827,19 +827,62 @@ const submitChallengeScore = async (req, res) => {
       });
     }
 
-    const session = gameSessions.get(sessionToken);
+    // Handle fallback token (when session creation fails)
+    const session =
+      sessionToken === "fallback" ? null : gameSessions.get(sessionToken);
     if (!session) {
-      return res.status(403).json({
-        error: "Invalid or expired game session",
-        message: "Please restart the game and try again",
-      });
+      // Check if this is a valid challenge and user is participant
+      const challengeRef = ref(database, `secureChallenges/${challengeId}`);
+      const challengeSnap = await get(challengeRef);
+
+      if (!challengeSnap.exists()) {
+        return res.status(404).json({ error: "Challenge not found" });
+      }
+
+      const challengeData = decryptData(challengeSnap.val(), ENCRYPTION_KEY);
+
+      // Verify user is a participant
+      if (
+        challengeData.challengerId !== userId &&
+        challengeData.challengedId !== userId
+      ) {
+        return res.status(403).json({
+          error: "Unauthorized: You are not a participant in this challenge",
+        });
+      }
+
+      // Verify challenge is in accepted state
+      if (challengeData.status !== "accepted") {
+        return res.status(400).json({
+          error: "Challenge must be accepted before playing",
+        });
+      }
+
+      // Check if user already has a score submitted
+      const hasSubmitted =
+        (challengeData.challengerId === userId &&
+          challengeData.challengerScore !== null) ||
+        (challengeData.challengedId === userId &&
+          challengeData.challengedScore !== null);
+
+      if (hasSubmitted) {
+        return res.status(400).json({
+          error: "You have already submitted a score for this challenge",
+        });
+      }
+
+      // Session expired but challenge is valid - allow score submission
+      console.log(
+        `⚠️ Session expired for challenge ${challengeId}, but allowing score submission`
+      );
     }
 
-    // Verify session matches request
+    // Verify session matches request (only if session exists)
     if (
-      session.challengeId !== challengeId ||
-      session.userId !== userId ||
-      session.used
+      session &&
+      (session.challengeId !== challengeId ||
+        session.userId !== userId ||
+        session.used)
     ) {
       return res.status(403).json({
         error: "Session validation failed",
@@ -847,20 +890,22 @@ const submitChallengeScore = async (req, res) => {
       });
     }
 
-    // Verify minimum play time (must play for at least 3 seconds)
-    const playTime = Date.now() - session.startTime;
-    if (playTime < 3000) {
-      return res.status(400).json({
-        error: "Invalid play time",
-        message: "Game must be played for at least 3 seconds",
-      });
+    // Verify minimum play time (only if session exists)
+    if (session) {
+      const playTime = Date.now() - session.startTime;
+      if (playTime < 3000) {
+        return res.status(400).json({
+          error: "Invalid play time",
+          message: "Game must be played for at least 3 seconds",
+        });
+      }
+
+      // Mark session as used (one-time use)
+      session.used = true;
+
+      // Delete session after use
+      setTimeout(() => gameSessions.delete(sessionToken), 5000);
     }
-
-    // Mark session as used (one-time use)
-    session.used = true;
-
-    // Delete session after use
-    setTimeout(() => gameSessions.delete(sessionToken), 5000);
 
     // Get encrypted challenge data
     const challengeRef = ref(database, `secureChallenges/${challengeId}`);

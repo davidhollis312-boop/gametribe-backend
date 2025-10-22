@@ -27,6 +27,15 @@ const generateKey = (password, salt) => {
  */
 const encryptData = (data, password) => {
   try {
+    // Validate password length
+    if (!password || password.length !== 32) {
+      throw new Error(
+        `Encryption key must be exactly 32 characters, got ${
+          password ? password.length : 0
+        }`
+      );
+    }
+
     // Generate random salt and IV
     const salt = crypto.randomBytes(SALT_LENGTH);
     const iv = crypto.randomBytes(IV_LENGTH);
@@ -62,6 +71,15 @@ const encryptData = (data, password) => {
  */
 const decryptData = (encryptedData, password) => {
   try {
+    // Validate password length
+    if (!password || password.length !== 32) {
+      throw new Error(
+        `Decryption key must be exactly 32 characters, got ${
+          password ? password.length : 0
+        }`
+      );
+    }
+
     console.log("Decrypting data:", typeof encryptedData, encryptedData);
 
     if (typeof encryptedData === "string") {
