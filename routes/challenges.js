@@ -5,6 +5,7 @@ const {
   createChallenge,
   acceptChallenge,
   rejectChallenge,
+  startGameSession,
   submitChallengeScore,
   getChallengeHistory,
 } = require("../controllers/challengeController");
@@ -15,6 +16,9 @@ const {
   antiFraudCheck,
   checkChallengeExpiration,
 } = require("../middleware/challengeValidator");
+const {
+  enforceChallengeRateLimit,
+} = require("../middleware/challengeRateLimiter");
 
 /**
  * Challenge Routes
@@ -25,6 +29,7 @@ const {
 router.post(
   "/create",
   authenticateToken,
+  enforceChallengeRateLimit,
   antiFraudCheck,
   validateChallengeRequest,
   validateWalletBalance,
@@ -35,6 +40,7 @@ router.post(
 router.post(
   "/accept/:challengeId",
   authenticateToken,
+  enforceChallengeRateLimit,
   antiFraudCheck,
   checkChallengeExpiration,
   acceptChallenge
@@ -44,15 +50,26 @@ router.post(
 router.post(
   "/reject/:challengeId",
   authenticateToken,
+  enforceChallengeRateLimit,
   antiFraudCheck,
   checkChallengeExpiration,
   rejectChallenge
+);
+
+// Start game session (required before submitting score)
+router.post(
+  "/start-session",
+  authenticateToken,
+  enforceChallengeRateLimit,
+  antiFraudCheck,
+  startGameSession
 );
 
 // Submit challenge score
 router.post(
   "/score",
   authenticateToken,
+  enforceChallengeRateLimit,
   antiFraudCheck,
   validateScoreSubmission,
   submitChallengeScore

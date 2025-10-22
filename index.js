@@ -80,8 +80,8 @@ const checkRateLimit = (ip) => {
 // upload is already imported from fileValidator middleware
 
 // Apply CORS
-const allowedOrigins = process.env.ALLOWED_ORIGINS 
-  ? process.env.ALLOWED_ORIGINS.split(',')
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",")
   : [
       // Development URLs
       "http://localhost:5173",
@@ -93,20 +93,48 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       "https://gt-server-mu.vercel.app",
     ];
 
-console.log('🌐 CORS Allowed Origins:', allowedOrigins);
+console.log("🌐 CORS Allowed Origins:", allowedOrigins);
+
+// SECURITY FIX: Mobile app authentication middleware
+const validateMobileApp = (req, res, next) => {
+  const origin = req.get("origin");
+
+  // If no origin (mobile apps, curl, Postman), validate mobile app ID
+  if (!origin) {
+    const mobileAppId = req.get("x-mobile-app-id");
+    const expectedMobileSecret =
+      process.env.MOBILE_APP_SECRET || "gametribe-mobile-2025";
+
+    // Always allow in development/testing mode
+    if (process.env.NODE_ENV !== "production") {
+      return next();
+    }
+
+    if (mobileAppId !== expectedMobileSecret) {
+      return res.status(403).json({
+        error: "Mobile app authentication required",
+        message: "Please use the official GameTribe mobile app",
+      });
+    }
+  }
+
+  next();
+};
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps or curl requests)
-      if (!origin) return callback(null, true);
-      
+      // Allow requests with no origin (mobile apps) - validated by middleware
+      if (!origin) {
+        return callback(null, true);
+      }
+
       if (allowedOrigins.includes(origin)) {
-        console.log('✅ CORS: Origin allowed:', origin);
+        console.log("✅ CORS: Origin allowed:", origin);
         return callback(null, true);
       } else {
-        console.log('❌ CORS: Origin blocked:', origin);
-        return callback(new Error('Not allowed by CORS'));
+        console.log("❌ CORS: Origin blocked:", origin);
+        return callback(new Error("Not allowed by CORS"));
       }
     },
     credentials: true,
@@ -116,10 +144,17 @@ app.use(
       "Authorization",
       "X-SSO-Token",
       "X-Community-Token",
+      "X-Mobile-App-Id",
     ],
     exposedHeaders: ["X-SSO-Token", "X-Community-Token"],
   })
 );
+
+// Apply mobile app validation (disabled for easier testing)
+// Enable this in production by setting NODE_ENV=production and uncommenting below
+// if (process.env.NODE_ENV === "production") {
+//   app.use(validateMobileApp);
+// }
 
 // Apply general rate limiting (noLimiter for development, devLimiter for production)
 const isDevelopment =
@@ -169,40 +204,56 @@ app.post("/api/payments/stripe/test-webhook", (req, res) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Determine route prefix based on environment
+// Firebase Functions URL is already /api, so we don't add /api prefix
+// For local development, we need /api prefix
+const isFirebaseFunctions = !!(
+  process.env.FUNCTION_NAME || process.env.FIREBASE_CONFIG
+);
+const routePrefix = isFirebaseFunctions ? "" : "/api";
+
+console.log(
+  `🔧 Route prefix: "${routePrefix}" (Firebase Functions: ${isFirebaseFunctions})`
+);
+
 // Mount routes with conditional rate limiting
-app.use("/api/posts", postsRouter);
-app.use("/api/clans", clansRouter);
-app.use("/api/users", usersRouter);
-app.use("/api/events", eventsRouter);
+app.use(`${routePrefix}/posts`, postsRouter);
+app.use(`${routePrefix}/clans`, clansRouter);
+app.use(`${routePrefix}/users`, usersRouter);
+app.use(`${routePrefix}/events`, eventsRouter);
 app.use(
-  "/api/payments",
+  `${routePrefix}/payments`,
   isDevelopment ? noLimiter : paymentLimiter,
   paymentRouter
 );
-app.use("/api/leaderboard", leaderboardRouter);
-app.use("/api/contact", contactRouter);
+app.use(`${routePrefix}/leaderboard`, leaderboardRouter);
+app.use(`${routePrefix}/contact`, contactRouter);
 
 // ✅ NEW: Mount production-grade routes with conditional rate limiting
-app.use("/api/analytics", analyticsRouter);
-app.use("/api/search", isDevelopment ? noLimiter : searchLimiter, searchRouter);
-app.use("/api/game-scores", gameScoresRouter);
-app.use("/api/game-reviews", gameReviewsRouter);
-app.use("/api/games", gamesRouter);
-app.use("/api/challenges", challengeRouter);
-app.use("/api/notifications", notificationRouter);
-app.use("/api/wallet", walletRouter);
-app.use("/api/messages", messagesRouter);
+app.use(`${routePrefix}/analytics`, analyticsRouter);
+app.use(
+  `${routePrefix}/search`,
+  isDevelopment ? noLimiter : searchLimiter,
+  searchRouter
+);
+app.use(`${routePrefix}/game-scores`, gameScoresRouter);
+app.use(`${routePrefix}/game-reviews`, gameReviewsRouter);
+app.use(`${routePrefix}/games`, gamesRouter);
+app.use(`${routePrefix}/challenges`, challengeRouter);
+app.use(`${routePrefix}/notifications`, notificationRouter);
+app.use(`${routePrefix}/wallet`, walletRouter);
+app.use(`${routePrefix}/messages`, messagesRouter);
 
 // Add auth route for cross-platform authentication with conditional rate limiting
 app.use(
-  "/api/auth",
+  `${routePrefix}/auth`,
   isDevelopment ? noLimiter : authLimiter,
   require("./routes/auth")
 );
 
 // Open Graph unfurl endpoint using proper scraper with new middleware
 app.get(
-  "/api/og",
+  `${routePrefix}/og`,
   isDevelopment ? noLimiter : searchLimiter,
   rateLimitOgRequests,
   validateUrlMiddleware,
@@ -442,12 +493,16 @@ app.get(
   }
 );
 
-app.get("/api/test", (req, res) => {
-  res.json({ message: "API is working" });
+app.get(`${routePrefix}/test`, (req, res) => {
+  res.json({
+    message: "API is working",
+    environment: process.env.NODE_ENV,
+    isFirebaseFunctions: !!isFirebaseFunctions,
+  });
 });
 
 // Test Firebase connection
-app.get("/api/test-firebase", async (req, res) => {
+app.get(`${routePrefix}/test-firebase`, async (req, res) => {
   try {
     const { database } = require("./config/firebase");
     const testRef = database.ref("test");
@@ -463,21 +518,29 @@ app.get("/api/test-firebase", async (req, res) => {
   }
 });
 
-// Global error handler
+// Import error handler
+const { errorHandler } = require("./middleware/errorHandler");
+
+// Global error handler (SECURITY FIX: Sanitized errors)
 app.use((err, req, res, next) => {
-  console.error("Server error:", {
-    message: err.message,
-    stack: err.stack,
-  });
   if (err instanceof multer.MulterError) {
-    return res.status(400).json({ error: `Multer error: ${err.message}` });
+    return res.status(400).json({
+      error: "File upload error",
+      message:
+        process.env.NODE_ENV === "development"
+          ? err.message
+          : "Invalid file upload",
+    });
   }
   if (err.message === "Unexpected end of form") {
-    return res
-      .status(400)
-      .json({ error: "Invalid multipart/form-data: Unexpected end of form" });
+    return res.status(400).json({
+      error: "Invalid request",
+      message: "Malformed request data",
+    });
   }
-  res.status(500).json({ error: "Internal server error" });
+
+  // Use sanitized error handler
+  errorHandler(err, req, res, next);
 });
 
 // Add file validation error handler
@@ -486,7 +549,12 @@ app.use(handleFileValidationError);
 // Use PORT from environment (Vercel sets this) or default to 5000
 const PORT = process.env.PORT || 5000;
 
-// Start server
+// Import challenge cleanup service
+const { startCleanupSchedule } = require("./services/challengeCleanup");
+
+// Note: isFirebaseFunctions is already defined earlier in this file (line ~209)
+
+// Start server (for local development or non-Firebase deployments)
 const startServer = async () => {
   try {
     // Start server
@@ -495,6 +563,9 @@ const startServer = async () => {
       console.log(`🗄️ Database: Firebase (default)`);
       console.log(`💾 Cache: In-memory (efficient)`);
       console.log(`🌐 Environment: ${process.env.NODE_ENV || "development"}`);
+
+      // Start challenge cleanup schedule
+      startCleanupSchedule();
     });
   } catch (error) {
     console.error("❌ Failed to start server:", error);
@@ -502,4 +573,24 @@ const startServer = async () => {
   }
 };
 
-startServer();
+// Export for Firebase Functions or start local server
+// isFirebaseFunctions is already defined earlier in the file
+if (isFirebaseFunctions) {
+  // Firebase Functions environment
+  const functions = require("firebase-functions/v2");
+
+  // Export the Express app as a Firebase Function
+  // Using v2 API with options
+  exports.api = functions.https.onRequest(
+    {
+      timeoutSeconds: 300,
+      memory: "512MiB",
+    },
+    app
+  );
+
+  console.log("✅ Backend configured for Firebase Functions v2");
+} else {
+  // Local development or other hosting platforms
+  startServer();
+}
