@@ -107,3 +107,4 @@ async function syncAllWallets() {
 // Run the sync
 syncAllWallets();
 
+

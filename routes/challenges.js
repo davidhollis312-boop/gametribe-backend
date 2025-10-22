@@ -119,6 +119,7 @@ router.get("/:challengeId", authenticateToken, async (req, res) => {
       challengeId: challengeData.challengeId,
       gameTitle: challengeData.gameTitle,
       gameImage: challengeData.gameImage,
+      gameUrl: challengeData.gameUrl,
       betAmount: challengeData.betAmount,
       status: challengeData.status,
       createdAt: challengeData.createdAt,
