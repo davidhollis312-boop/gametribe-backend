@@ -1175,9 +1175,11 @@ const processChallengeCompletion = async (challengeData) => {
 const getChallengeHistory = async (req, res) => {
   try {
     const userId = req.user.uid;
-    const { limit = 50, offset = 0 } = req.query;
+    const { limit = 50, offset = 0, status } = req.query;
 
-    console.log(`🔍 Fetching challenges for user: ${userId}`);
+    console.log(
+      `🔍 Fetching challenges for user: ${userId}, status: ${status || "all"}`
+    );
     const startTime = Date.now();
 
     // Get user's challenges (both as challenger and challenged)
@@ -1206,6 +1208,10 @@ const getChallengeHistory = async (req, res) => {
           challengeData.challengerId === userId ||
           challengeData.challengedId === userId
         ) {
+          // Filter by status if provided
+          if (status && challengeData.status !== status) {
+            continue;
+          }
           // Collect unique user IDs for batch fetching
           uniqueUserIds.add(challengeData.challengerId);
           uniqueUserIds.add(challengeData.challengedId);
@@ -1241,7 +1247,11 @@ const getChallengeHistory = async (req, res) => {
       }
     }
 
-    console.log(`✅ User has ${userChallenges.length} challenges`);
+    console.log(
+      `✅ User has ${userChallenges.length} challenges${
+        status ? ` (filtered by status: ${status})` : ""
+      }`
+    );
     console.log(`👥 Unique users to fetch: ${uniqueUserIds.size}`);
 
     // OPTIMIZATION 2: Batch fetch only specific user fields (avoid circular references)
