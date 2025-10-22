@@ -180,7 +180,47 @@ router.delete(
       }
 
       // Decrypt challenge data
-      const challengeData = decryptData(challengeSnap.val(), ENCRYPTION_KEY);
+      let challengeData;
+      try {
+        const rawData = challengeSnap.val();
+        console.log(
+          "Raw challenge data for challenge",
+          challengeId,
+          ":",
+          typeof rawData,
+          rawData
+        );
+
+        // Check if data is already decrypted (fallback for old data)
+        if (
+          rawData &&
+          typeof rawData === "object" &&
+          rawData.challengeId &&
+          !rawData.salt
+        ) {
+          console.log(
+            "Challenge data appears to be unencrypted, using directly"
+          );
+          challengeData = rawData;
+        } else {
+          challengeData = decryptData(rawData, ENCRYPTION_KEY);
+        }
+      } catch (decryptError) {
+        console.error(
+          "Failed to decrypt challenge data for challenge",
+          challengeId,
+          ":",
+          decryptError
+        );
+        console.error("Raw data structure:", challengeSnap.val());
+
+        // For now, return a more specific error to help debug
+        return res.status(500).json({
+          error: "Failed to decrypt challenge data",
+          message: `Challenge ${challengeId} data is corrupted or encrypted with different key. Error: ${decryptError.message}`,
+          challengeId: challengeId,
+        });
+      }
 
       // Validate user is a participant in this challenge
       const isChallenger = challengeData.challengerId === userId;
