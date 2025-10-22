@@ -34,6 +34,7 @@ const sanitizeContent = (req, res, next) => {
           "h6",
         ],
         ALLOWED_ATTR: ["href", "target", "rel"],
+        ALLOWED_URI_REGEXP: /^(https?:\/\/|mailto:)/i, // SECURITY FIX: Block javascript:, data:, vbscript:
         KEEP_CONTENT: true,
         ALLOW_DATA_ATTR: false,
         ALLOW_UNKNOWN_PROTOCOLS: false,
@@ -63,6 +64,7 @@ const sanitizeContent = (req, res, next) => {
           "h6",
         ],
         ALLOWED_ATTR: ["href", "target", "rel"],
+        ALLOWED_URI_REGEXP: /^(https?:\/\/|mailto:)/i, // SECURITY FIX: Block malicious protocols
         KEEP_CONTENT: true,
         ALLOW_DATA_ATTR: false,
         ALLOW_UNKNOWN_PROTOCOLS: false,
@@ -86,6 +88,7 @@ const sanitizeContent = (req, res, next) => {
           "a",
         ],
         ALLOWED_ATTR: ["href", "target", "rel"],
+        ALLOWED_URI_REGEXP: /^(https?:\/\/|mailto:)/i, // SECURITY FIX: Block malicious protocols
         KEEP_CONTENT: true,
         ALLOW_DATA_ATTR: false,
         ALLOW_UNKNOWN_PROTOCOLS: false,

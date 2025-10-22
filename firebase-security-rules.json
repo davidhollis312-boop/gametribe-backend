@@ -1,0 +1,109 @@
+{
+  "rules": {
+    "users": {
+      ".read": "true",
+      "$userId": {
+        ".write": "auth != null && $userId === auth.uid",
+
+        "wallet": {
+          ".read": "auth != null && $userId === auth.uid",
+          ".write": "false"
+        },
+
+        "escrowBalance": {
+          ".read": "auth != null && $userId === auth.uid",
+          ".write": "false"
+        },
+
+        "privateData": {
+          ".read": "auth != null && $userId === auth.uid",
+          ".write": "auth != null && $userId === auth.uid"
+        },
+
+        "email": {
+          ".read": "auth != null && $userId === auth.uid"
+        },
+
+        "phoneNumber": {
+          ".read": "auth != null && $userId === auth.uid"
+        },
+
+        "points": {
+          ".read": "true",
+          ".write": "false"
+        }
+      }
+    },
+
+    "presence": {
+      "$userId": {
+        ".read": "auth != null",
+        ".write": "$userId === auth.uid"
+      }
+    },
+
+    "status": {
+      "$userId": {
+        ".read": "auth != null",
+        ".write": "$userId === auth.uid"
+      }
+    },
+
+    "secureChallenges": {
+      "$challengeId": {
+        ".read": "auth != null",
+        ".write": "false"
+      }
+    },
+
+    "auditLogs": {
+      ".read": "false",
+      ".write": "false"
+    },
+
+    "fraudAlerts": {
+      ".read": "false",
+      ".write": "false"
+    },
+
+    "stuckChallenges": {
+      ".read": "false",
+      ".write": "false"
+    },
+
+    "notifications": {
+      "$userId": {
+        ".read": "$userId === auth.uid",
+        ".write": "$userId === auth.uid"
+      }
+    },
+
+    "messages": {
+      "$messageId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+
+    "posts": {
+      ".read": "auth != null",
+      "$postId": {
+        ".write": "auth != null && (newData.child('authorId').val() === auth.uid || !data.exists())"
+      }
+    },
+
+    "clans": {
+      ".read": "auth != null",
+      "$clanId": {
+        ".write": "auth != null"
+      }
+    },
+
+    "events": {
+      ".read": "auth != null",
+      "$eventId": {
+        ".write": "auth != null"
+      }
+    }
+  }
+}

@@ -44,6 +44,29 @@ const upload = multer({
   },
 });
 
+// Multer error handler
+const handleMulterError = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    console.error("❌ Multer Error:", err.message, err.code);
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res
+        .status(400)
+        .json({ error: "File too large. Maximum size is 5MB." });
+    }
+    if (err.code === "LIMIT_FIELD_SIZE") {
+      return res.status(400).json({ error: "Field data too large." });
+    }
+    if (err.code === "LIMIT_UNEXPECTED_FILE") {
+      return res.status(400).json({ error: "Unexpected file field." });
+    }
+    return res.status(400).json({ error: err.message });
+  } else if (err) {
+    console.error("❌ Upload Error:", err.message);
+    return res.status(400).json({ error: err.message });
+  }
+  next();
+};
+
 // Public routes
 router.get("/", getEvents);
 router.get("/:id", getEventById);
@@ -51,7 +74,13 @@ router.get("/:id/bookings", getEventBookings);
 router.get("/:id/comments", getEventComments);
 
 // Protected routes
-router.post("/", authenticate, upload.single("image"), createEvent);
+router.post(
+  "/",
+  authenticate,
+  upload.single("image"),
+  handleMulterError,
+  createEvent
+);
 router.put("/:id", authenticate, upload.single("image"), updateEvent);
 router.delete("/:id", authenticate, deleteEvent);
 router.post("/:id/book", authenticate, bookEvent);

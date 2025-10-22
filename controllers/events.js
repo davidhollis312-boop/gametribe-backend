@@ -15,6 +15,10 @@ const sanitizeInput = (html) => {
 
 const createEvent = async (req, res, next) => {
   try {
+    console.log("📝 Create Event - Request body:", req.body);
+    console.log("📝 Create Event - User:", req.user?.uid);
+    console.log("📝 Create Event - File:", req.file ? "Present" : "None");
+
     const {
       title,
       description,
@@ -33,6 +37,11 @@ const createEvent = async (req, res, next) => {
     const userId = req.user.uid;
 
     if (!title || !description || !startDate) {
+      console.log("❌ Create Event - Missing required fields:", {
+        title: !!title,
+        description: !!description,
+        startDate: !!startDate,
+      });
       return res
         .status(400)
         .json({ error: "Title, description, and start date are required" });
@@ -298,11 +307,9 @@ const updateEvent = async (req, res, next) => {
         .json({ error: "End date must be after start date" });
     }
     if (imageUrl && req.file) {
-      return res
-        .status(400)
-        .json({
-          error: "Please provide either an image file or URL, not both",
-        });
+      return res.status(400).json({
+        error: "Please provide either an image file or URL, not both",
+      });
     }
     if (req.file && req.file.size > 5 * 1024 * 1024) {
       return res

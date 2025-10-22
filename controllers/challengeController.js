@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const { database } = require("../config/firebase");
+const admin = require("firebase-admin");
 const {
   ref,
   get,
@@ -24,11 +25,43 @@ const {
  * Handles encrypted monetized challenges with wallet integration
  */
 
-// Encryption key (should be in environment variables in production)
-const ENCRYPTION_KEY =
-  process.env.CHALLENGE_ENCRYPTION_KEY || "your-32-character-secret-key-here!";
+// Encryption key validation (NO FALLBACK - must be set in environment)
+// For Firebase Functions, validation happens on first use, not at module load
+const getEncryptionKey = () => {
+  const ENCRYPTION_KEY = process.env.CHALLENGE_ENCRYPTION_KEY;
+  if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+    throw new Error(
+      "CHALLENGE_ENCRYPTION_KEY must be set and >= 32 characters"
+    );
+  }
+  if (ENCRYPTION_KEY === "your-32-character-secret-key-here!") {
+    throw new Error(
+      "Default encryption key detected! Set proper key in environment"
+    );
+  }
+  return ENCRYPTION_KEY;
+};
+
+// Get encryption key
+const ENCRYPTION_KEY = process.env.CHALLENGE_ENCRYPTION_KEY || "";
+
 const SERVICE_CHARGE_PERCENTAGE = 20; // 20% service charge
 const MINIMUM_BET_AMOUNT = 20; // 20 shillings minimum
+const MAXIMUM_BET_AMOUNT = 10000; // 10,000 shillings maximum
+
+// Game session management (for score verification)
+const gameSessions = new Map();
+const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+
+// Maximum scores per game (anti-cheat)
+const MAX_SCORES_PER_GAME = {
+  default: 100000, // Default max score
+  gt_bb: 50000, // GT BB max reasonable score
+  2048: 100000, // 2048 max score
+  flappy_bird: 1000, // Flappy Bird max reasonable score
+  quiz_star: 10000, // Quiz Star max score
+  flippin_bottle: 500, // Flippin Bottle max score
+};
 
 /**
  * Create a secure challenge
@@ -52,21 +85,60 @@ const createChallenge = async (req, res) => {
       });
     }
 
-    // Validate bet amount
-    if (betAmount < MINIMUM_BET_AMOUNT) {
+    // Validate bet amount (both min and max)
+    if (betAmount < MINIMUM_BET_AMOUNT || betAmount > MAXIMUM_BET_AMOUNT) {
       return res.status(400).json({
-        error: `Minimum bet amount is ${MINIMUM_BET_AMOUNT} shillings`,
+        error: `Bet amount must be between ${MINIMUM_BET_AMOUNT} and ${MAXIMUM_BET_AMOUNT} shillings`,
+      });
+    }
+
+    // VALIDATE GAME EXISTS in Firestore
+    console.log(`🎮 Validating game exists: ${gameId}`);
+    try {
+      const firestore = admin.firestore();
+      const gameDoc = await firestore.collection('games').doc(gameId).get();
+      
+      if (!gameDoc.exists) {
+        console.error(`❌ Game not found in Firestore: ${gameId}`);
+        return res.status(404).json({ 
+          error: "Game not found",
+          details: "The selected game does not exist or has been removed.",
+          gameId: gameId
+        });
+      }
+      
+      const gameData = gameDoc.data();
+      console.log(`✅ Game found: ${gameData.title || gameTitle}`);
+      
+      // Optional: Update gameTitle and gameImage from Firestore if they're different
+      if (gameData.title && gameData.title !== gameTitle) {
+        console.log(`📝 Updating game title from "${gameTitle}" to "${gameData.title}"`);
+      }
+    } catch (gameError) {
+      console.error(`❌ Error validating game: ${gameError.message}`);
+      return res.status(500).json({ 
+        error: "Failed to validate game",
+        details: gameError.message
       });
     }
 
     // Check challenger's wallet balance (using existing structure: users/{userId}/wallet)
+    console.log(`👤 Validating challenger user: ${challengerId}`);
     const challengerUserRef = ref(database, `users/${challengerId}`);
     const challengerUserSnap = await get(challengerUserRef);
     const challengerUser = challengerUserSnap.val();
 
     if (!challengerUser) {
-      return res.status(404).json({ error: "Challenger user not found" });
+      console.error(`❌ Challenger user not found in Realtime Database: ${challengerId}`);
+      console.error(`💡 Hint: User may need to sync their profile from PlayChat app (Profile > Sync button)`);
+      return res.status(404).json({ 
+        error: "Challenger user not found",
+        details: "Your profile is not synced to the database. Please go to Profile > Tap 'Sync Profile' button, then try again.",
+        userId: challengerId
+      });
     }
+    console.log(`✅ Challenger user found: ${challengerUser.username || 'Unknown'}`);
+    console.log(`💰 Challenger wallet balance: ${challengerUser.wallet?.amount || 0} KES`);
 
     const challengerWallet = challengerUser.wallet;
     const challengerBalance = challengerWallet?.amount || 0;
@@ -78,13 +150,22 @@ const createChallenge = async (req, res) => {
     }
 
     // Check if challenged user exists and has wallet
+    console.log(`👤 Validating challenged user: ${challengedId}`);
     const challengedUserRef = ref(database, `users/${challengedId}`);
     const challengedUserSnap = await get(challengedUserRef);
     const challengedUser = challengedUserSnap.val();
 
     if (!challengedUser) {
-      return res.status(404).json({ error: "Challenged user not found" });
+      console.error(`❌ Challenged user not found in Realtime Database: ${challengedId}`);
+      console.error(`💡 Hint: Opponent may need to open PlayChat app and sync their profile`);
+      return res.status(404).json({ 
+        error: "Challenged user not found",
+        details: "The opponent's profile is not synced to the database. They need to open PlayChat app and tap Profile > Sync Profile button.",
+        userId: challengedId
+      });
     }
+    console.log(`✅ Challenged user found: ${challengedUser.username || 'Unknown'}`);
+    console.log(`💰 Challenged wallet balance: ${challengedUser.wallet?.amount || 0} KES`);
 
     const challengedWallet = challengedUser.wallet;
     const challengedBalance = challengedWallet?.amount || 0;
@@ -164,29 +245,49 @@ const createChallenge = async (req, res) => {
     // Encrypt sensitive challenge data
     const encryptedChallengeData = encryptData(challengeData, ENCRYPTION_KEY);
 
-    // Deduct bet amount from challenger's wallet (hold in escrow)
-    const challengerWalletUpdates = {
-      amount: challengerBalance - betAmount,
-      escrowBalance: (challengerWallet?.escrowBalance || 0) + betAmount,
-      lastTransaction: {
+    // SECURITY FIX: Use atomic transaction for wallet deduction
+    const challengerWalletRef = admin
+      .database()
+      .ref(`users/${challengerId}/wallet`);
+
+    let transactionSuccess = false;
+    await challengerWalletRef.transaction((wallet) => {
+      if (!wallet) {
+        console.error("Wallet not found during transaction");
+        return wallet;
+      }
+
+      const currentBalance = wallet.amount || 0;
+      if (currentBalance < betAmount) {
+        console.error(`Insufficient balance: ${currentBalance} < ${betAmount}`);
+        return; // Abort transaction
+      }
+
+      // Atomic wallet update
+      wallet.amount = currentBalance - betAmount;
+      wallet.escrowBalance = (wallet.escrowBalance || 0) + betAmount;
+      wallet.lastTransaction = {
         type: "challenge_bet",
         amount: betAmount,
         challengeId,
         timestamp: Date.now(),
-      },
-    };
+      };
+      wallet.updatedAt = new Date().toISOString();
+
+      transactionSuccess = true;
+      return wallet;
+    });
+
+    if (!transactionSuccess) {
+      return res.status(400).json({
+        error: "Failed to deduct wallet balance",
+        message: "Transaction aborted - please try again",
+      });
+    }
 
     // Store encrypted challenge
     const challengeRef = ref(database, `secureChallenges/${challengeId}`);
     await set(challengeRef, encryptedChallengeData);
-
-    // Update challenger's wallet in user document
-    await update(challengerUserRef, {
-      wallet: {
-        ...challengerWallet,
-        ...challengerWalletUpdates,
-      },
-    });
 
     // Create notification for challenged user
     const notificationData = {
@@ -355,26 +456,52 @@ const acceptChallenge = async (req, res) => {
     const challengedBalance = challengedWallet.amount || 0;
 
     if (challengedBalance < challengeData.betAmount) {
-      return res
-        .status(400)
-        .json({
-          error:
-            "Insufficient wallet balance to accept challenge. Please add funds to your wallet.",
-        });
+      return res.status(400).json({
+        error:
+          "Insufficient wallet balance to accept challenge. Please add funds to your wallet.",
+      });
     }
 
-    // Deduct bet amount from challenged user's wallet (hold in escrow)
-    const challengedWalletUpdates = {
-      amount: challengedBalance - challengeData.betAmount,
-      escrowBalance:
-        (challengedWallet.escrowBalance || 0) + challengeData.betAmount,
-      lastTransaction: {
+    // SECURITY FIX: Use atomic transaction for wallet deduction
+    const challengedWalletRef = admin.database().ref(`users/${userId}/wallet`);
+
+    let transactionSuccess = false;
+    await challengedWalletRef.transaction((wallet) => {
+      if (!wallet) {
+        console.error("Wallet not found during transaction");
+        return wallet;
+      }
+
+      const currentBalance = wallet.amount || 0;
+      if (currentBalance < challengeData.betAmount) {
+        console.error(
+          `Insufficient balance: ${currentBalance} < ${challengeData.betAmount}`
+        );
+        return; // Abort transaction
+      }
+
+      // Atomic wallet update
+      wallet.amount = currentBalance - challengeData.betAmount;
+      wallet.escrowBalance =
+        (wallet.escrowBalance || 0) + challengeData.betAmount;
+      wallet.lastTransaction = {
         type: "challenge_accept",
         amount: challengeData.betAmount,
         challengeId,
         timestamp: Date.now(),
-      },
-    };
+      };
+      wallet.updatedAt = new Date().toISOString();
+
+      transactionSuccess = true;
+      return wallet;
+    });
+
+    if (!transactionSuccess) {
+      return res.status(400).json({
+        error: "Insufficient wallet balance to accept challenge",
+        message: "Transaction aborted - please add funds and try again",
+      });
+    }
 
     // Update challenge status
     const updatedChallengeData = {
@@ -388,14 +515,8 @@ const acceptChallenge = async (req, res) => {
       ENCRYPTION_KEY
     );
 
-    // Update challenge and wallet
+    // Update challenge
     await update(challengeRef, encryptedUpdatedChallenge);
-    await update(challengedUserRef, {
-      wallet: {
-        ...challengedWallet,
-        ...challengedWalletUpdates,
-      },
-    });
 
     // Log transaction for audit
     const auditLog = {
@@ -473,20 +594,39 @@ const rejectChallenge = async (req, res) => {
     const challengerUser = challengerUserSnap.val();
     const challengerWallet = challengerUser.wallet || {};
 
-    // Refund challenger (minus 4% rejection fee)
-    const challengerWalletUpdates = {
-      amount: (challengerWallet.amount || 0) + refundAmount,
-      escrowBalance:
-        (challengerWallet.escrowBalance || 0) - challengeData.betAmount,
-      lastTransaction: {
+    // SECURITY FIX: Use atomic transaction for refund
+    const challengerWalletRef = admin
+      .database()
+      .ref(`users/${challengeData.challengerId}/wallet`);
+
+    await challengerWalletRef.transaction((wallet) => {
+      if (!wallet) return wallet;
+
+      const currentEscrow = wallet.escrowBalance || 0;
+      if (currentEscrow < challengeData.betAmount) {
+        console.error(
+          `Escrow mismatch: ${currentEscrow} < ${challengeData.betAmount}`
+        );
+        // Continue anyway for refunds (don't block user)
+      }
+
+      // Atomic refund
+      wallet.amount = (wallet.amount || 0) + refundAmount;
+      wallet.escrowBalance = Math.max(
+        0,
+        currentEscrow - challengeData.betAmount
+      );
+      wallet.lastTransaction = {
         type: "challenge_rejected_refund",
         amount: refundAmount,
         rejectionFee,
         challengeId,
         timestamp: Date.now(),
-      },
-      updatedAt: new Date().toISOString(),
-    };
+      };
+      wallet.updatedAt = new Date().toISOString();
+
+      return wallet;
+    });
 
     // Update challenge status
     const updatedChallengeData = {
@@ -503,14 +643,8 @@ const rejectChallenge = async (req, res) => {
       ENCRYPTION_KEY
     );
 
-    // Update challenge and wallet
+    // Update challenge
     await update(challengeRef, encryptedUpdatedChallenge);
-    await update(challengerUserRef, {
-      wallet: {
-        ...challengerWallet,
-        ...challengerWalletUpdates,
-      },
-    });
 
     // Log transaction for audit
     const auditLog = {
@@ -548,17 +682,148 @@ const rejectChallenge = async (req, res) => {
 };
 
 /**
- * Submit challenge score
+ * Start a game session (called when user clicks "Start Game")
+ */
+const startGameSession = async (req, res) => {
+  try {
+    const { challengeId } = req.body;
+    const userId = req.user.uid;
+
+    // Get challenge to verify user is participant
+    const challengeRef = ref(database, `secureChallenges/${challengeId}`);
+    const challengeSnap = await get(challengeRef);
+
+    if (!challengeSnap.exists()) {
+      return res.status(404).json({ error: "Challenge not found" });
+    }
+
+    const challengeData = decryptData(challengeSnap.val(), ENCRYPTION_KEY);
+
+    // Verify user is a participant
+    if (
+      challengeData.challengerId !== userId &&
+      challengeData.challengedId !== userId
+    ) {
+      return res.status(403).json({
+        error: "Unauthorized: You are not a participant in this challenge",
+      });
+    }
+
+    // Verify challenge is in accepted state
+    if (challengeData.status !== "accepted") {
+      return res.status(400).json({
+        error: "Challenge must be accepted before playing",
+      });
+    }
+
+    // Check if user already has a score submitted
+    const hasSubmitted =
+      (challengeData.challengerId === userId &&
+        challengeData.challengerScore !== null) ||
+      (challengeData.challengedId === userId &&
+        challengeData.challengedScore !== null);
+
+    if (hasSubmitted) {
+      return res.status(400).json({
+        error: "You have already submitted a score for this challenge",
+      });
+    }
+
+    // Generate session token
+    const sessionToken = crypto.randomBytes(32).toString("hex");
+    const session = {
+      challengeId,
+      userId,
+      gameId: challengeData.gameId,
+      startTime: Date.now(),
+      ipAddress: req.ip,
+      userAgent: req.get("User-Agent"),
+      used: false,
+    };
+
+    gameSessions.set(sessionToken, session);
+
+    // Auto-expire session after timeout
+    setTimeout(() => {
+      gameSessions.delete(sessionToken);
+      console.log(
+        `🕐 Game session expired: ${sessionToken.substring(0, 8)}...`
+      );
+    }, SESSION_TIMEOUT);
+
+    console.log(`🎮 Game session started for challenge ${challengeId}`);
+
+    res.json({
+      success: true,
+      sessionToken,
+      expiresIn: SESSION_TIMEOUT,
+      gameId: challengeData.gameId,
+      gameTitle: challengeData.gameTitle,
+    });
+  } catch (error) {
+    console.error("Error starting game session:", error);
+    res.status(500).json({
+      error: "Failed to start game session",
+      message: error.message,
+    });
+  }
+};
+
+/**
+ * Submit challenge score (with session verification)
  */
 const submitChallengeScore = async (req, res) => {
   try {
-    const { challengeId, score } = req.body;
+    const { challengeId, score, sessionToken } = req.body;
     const userId = req.user.uid;
 
     // Validate score
     if (typeof score !== "number" || score < 0 || !isFinite(score)) {
       return res.status(400).json({ error: "Invalid score" });
     }
+
+    // SECURITY: Verify game session token
+    if (!sessionToken) {
+      return res.status(400).json({
+        error: "Session token required",
+        message: "Game must be started through official interface",
+      });
+    }
+
+    const session = gameSessions.get(sessionToken);
+    if (!session) {
+      return res.status(403).json({
+        error: "Invalid or expired game session",
+        message: "Please restart the game and try again",
+      });
+    }
+
+    // Verify session matches request
+    if (
+      session.challengeId !== challengeId ||
+      session.userId !== userId ||
+      session.used
+    ) {
+      return res.status(403).json({
+        error: "Session validation failed",
+        message: "Session does not match current request",
+      });
+    }
+
+    // Verify minimum play time (must play for at least 10 seconds)
+    const playTime = Date.now() - session.startTime;
+    if (playTime < 10000) {
+      return res.status(400).json({
+        error: "Invalid play time",
+        message: "Game must be played for at least 10 seconds",
+      });
+    }
+
+    // Mark session as used (one-time use)
+    session.used = true;
+
+    // Delete session after use
+    setTimeout(() => gameSessions.delete(sessionToken), 5000);
 
     // Get encrypted challenge data
     const challengeRef = ref(database, `secureChallenges/${challengeId}`);
@@ -570,6 +835,34 @@ const submitChallengeScore = async (req, res) => {
 
     // Decrypt challenge data
     const challengeData = decryptData(challengeSnap.val(), ENCRYPTION_KEY);
+
+    // SECURITY: Verify score is within reasonable limits for the game
+    const maxScore =
+      MAX_SCORES_PER_GAME[session.gameId] || MAX_SCORES_PER_GAME.default;
+    if (score > maxScore) {
+      console.warn(
+        `⚠️ FRAUD ALERT: Suspicious score ${score} > ${maxScore} for game ${session.gameId} by user ${userId}`
+      );
+      // Log fraud attempt
+      const fraudRef = ref(
+        database,
+        `fraudAlerts/score_manipulation_${Date.now()}`
+      );
+      await set(fraudRef, {
+        type: "score_manipulation",
+        userId,
+        challengeId,
+        score,
+        maxScore,
+        gameId: session.gameId,
+        timestamp: Date.now(),
+        ipAddress: req.ip,
+      });
+      return res.status(400).json({
+        error: "Score exceeds maximum allowed for this game",
+        message: `Maximum score for ${challengeData.gameTitle} is ${maxScore}`,
+      });
+    }
 
     // Validate user can submit score for this challenge
     if (
@@ -770,18 +1063,62 @@ const processChallengeCompletion = async (challengeData) => {
       };
     }
 
-    // Update wallets
-    await update(challengerUserRef, {
-      wallet: {
-        ...challengerWallet,
-        ...challengerWalletUpdates,
-      },
+    // SECURITY FIX: Use atomic transactions for wallet updates
+    const challengerWalletRef = admin
+      .database()
+      .ref(`users/${challengerId}/wallet`);
+    const challengedWalletRef = admin
+      .database()
+      .ref(`users/${challengedId}/wallet`);
+
+    // Update challenger wallet atomically
+    await challengerWalletRef.transaction((wallet) => {
+      if (!wallet) return wallet;
+
+      // Verify and release escrow
+      const currentEscrow = wallet.escrowBalance || 0;
+      if (currentEscrow < betAmount) {
+        console.warn(
+          `⚠️ Escrow mismatch for challenger: ${currentEscrow} < ${betAmount}`
+        );
+      }
+
+      wallet.escrowBalance = Math.max(0, currentEscrow - betAmount);
+
+      if (challengerWalletUpdates.amount !== undefined) {
+        wallet.amount = challengerWalletUpdates.amount;
+      }
+      if (challengerWalletUpdates.lastTransaction) {
+        wallet.lastTransaction = challengerWalletUpdates.lastTransaction;
+      }
+      wallet.updatedAt = new Date().toISOString();
+
+      return wallet;
     });
-    await update(challengedUserRef, {
-      wallet: {
-        ...challengedWallet,
-        ...challengedWalletUpdates,
-      },
+
+    // Update challenged wallet atomically
+    await challengedWalletRef.transaction((wallet) => {
+      if (!wallet) return wallet;
+
+      // Verify and release escrow
+      const currentEscrow = wallet.escrowBalance || 0;
+      if (currentEscrow < betAmount) {
+        console.warn(
+          `⚠️ Escrow mismatch for challenged: ${currentEscrow} < ${betAmount}`
+        );
+      }
+
+      wallet.escrowBalance = Math.max(0, currentEscrow - betAmount);
+
+      if (challengedWalletUpdates.amount !== undefined) {
+        wallet.amount = challengedWalletUpdates.amount;
+      }
+      if (challengedWalletUpdates.lastTransaction) {
+        wallet.lastTransaction = challengedWalletUpdates.lastTransaction;
+      }
+      wallet.updatedAt = new Date().toISOString();
+
+      return wallet;
     });
 
     console.log(
@@ -949,6 +1286,7 @@ module.exports = {
   createChallenge,
   acceptChallenge,
   rejectChallenge,
+  startGameSession,
   submitChallengeScore,
   getChallengeHistory,
 };

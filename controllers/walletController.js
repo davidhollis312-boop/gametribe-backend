@@ -125,7 +125,22 @@ const initializeWallet = async (req, res) => {
 const getWalletTransactions = async (req, res) => {
   try {
     const userId = req.user.uid;
-    const { limit = 20, offset = 0 } = req.query;
+
+    // SECURITY FIX: Validate and sanitize pagination parameters
+    let limit = parseInt(req.query.limit) || 20;
+    let offset = parseInt(req.query.offset) || 0;
+
+    // Validate limits
+    if (isNaN(limit) || isNaN(offset)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid pagination parameters",
+      });
+    }
+
+    // Enforce reasonable limits
+    limit = Math.min(Math.max(limit, 1), 100); // Between 1 and 100
+    offset = Math.max(offset, 0); // Must be positive
 
     const userRef = ref(database, `users/${userId}`);
     const userSnap = await get(userRef);
@@ -144,7 +159,7 @@ const getWalletTransactions = async (req, res) => {
     // Sort by date (newest first) and paginate
     const sortedTransactions = Object.values(transactions)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-      .slice(parseInt(offset), parseInt(offset) + parseInt(limit));
+      .slice(offset, offset + limit);
 
     res.json({
       success: true,
