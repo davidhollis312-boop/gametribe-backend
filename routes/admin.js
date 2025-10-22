@@ -4,7 +4,8 @@ const router = express.Router();
 let admin = null;
 const getAdmin = () => {
   if (!admin) {
-    admin = require("../config/firebase");
+    const firebaseConfig = require("../config/firebase");
+    admin = firebaseConfig.admin;
   }
   return admin;
 };
@@ -39,10 +40,8 @@ router.post("/sync-wallet/:userId", adminAuth, async (req, res) => {
       lastUpdated: Date.now(),
     };
 
-    const { database } = getAdmin();
-    const { ref, set } = require("firebase/database");
-    const walletRef = ref(database, `users/${userId}/wallet`);
-    await set(walletRef, walletData);
+    const admin = getAdmin();
+    await admin.database().ref(`users/${userId}/wallet`).set(walletData);
 
     res.json({
       success: true,
@@ -66,8 +65,7 @@ router.post("/sync-wallets-batch", adminAuth, async (req, res) => {
     }
 
     const results = [];
-    const { database } = getAdmin();
-    const { ref, set } = require("firebase/database");
+    const admin = getAdmin();
 
     for (const wallet of wallets) {
       try {
@@ -78,8 +76,7 @@ router.post("/sync-wallets-batch", adminAuth, async (req, res) => {
           lastUpdated: Date.now(),
         };
 
-        const walletRef = ref(database, `users/${wallet.userId}/wallet`);
-        await set(walletRef, walletData);
+        await admin.database().ref(`users/${wallet.userId}/wallet`).set(walletData);
 
         results.push({
           userId: wallet.userId,
