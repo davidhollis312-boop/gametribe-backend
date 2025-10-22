@@ -147,18 +147,29 @@ const createChallenge = async (req, res) => {
     console.log(
       `✅ Challenger user found: ${challengerUser.username || "Unknown"}`
     );
-    console.log(
-      `💰 Challenger wallet balance: ${challengerUser.wallet?.amount || 0} KES`
-    );
-
+    
     const challengerWallet = challengerUser.wallet;
     const challengerBalance = challengerWallet?.amount || 0;
+    const challengerEscrow = challengerWallet?.escrowBalance || 0;
+    
+    console.log(`💰 Challenger wallet details:`, {
+      available: challengerBalance,
+      escrow: challengerEscrow,
+      betAmount: betAmount,
+      hasEnough: challengerBalance >= betAmount
+    });
 
     if (challengerBalance < betAmount) {
+      console.error(`❌ Insufficient balance: Available ${challengerBalance} KES < Required ${betAmount} KES`);
       return res.status(400).json({
         error: "Insufficient wallet balance. Please add funds to your wallet.",
+        details: `You have ${challengerBalance} KES available, but need ${betAmount} KES for this challenge. (${challengerEscrow} KES is locked in escrow)`,
+        available: challengerBalance,
+        required: betAmount,
+        escrow: challengerEscrow
       });
     }
+    console.log(`✅ Balance check passed: ${challengerBalance} KES >= ${betAmount} KES`);
 
     // Check if challenged user exists and has wallet
     console.log(`👤 Validating challenged user: ${challengedId}`);
