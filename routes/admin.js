@@ -76,7 +76,10 @@ router.post("/sync-wallets-batch", adminAuth, async (req, res) => {
           lastUpdated: Date.now(),
         };
 
-        await admin.database().ref(`users/${wallet.userId}/wallet`).set(walletData);
+        await admin
+          .database()
+          .ref(`users/${wallet.userId}/wallet`)
+          .set(walletData);
 
         results.push({
           userId: wallet.userId,
