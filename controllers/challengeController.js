@@ -96,29 +96,31 @@ const createChallenge = async (req, res) => {
     console.log(`🎮 Validating game exists: ${gameId}`);
     try {
       const firestore = admin.firestore();
-      const gameDoc = await firestore.collection('games').doc(gameId).get();
-      
+      const gameDoc = await firestore.collection("games").doc(gameId).get();
+
       if (!gameDoc.exists) {
         console.error(`❌ Game not found in Firestore: ${gameId}`);
-        return res.status(404).json({ 
+        return res.status(404).json({
           error: "Game not found",
           details: "The selected game does not exist or has been removed.",
-          gameId: gameId
+          gameId: gameId,
         });
       }
-      
+
       const gameData = gameDoc.data();
       console.log(`✅ Game found: ${gameData.title || gameTitle}`);
-      
+
       // Optional: Update gameTitle and gameImage from Firestore if they're different
       if (gameData.title && gameData.title !== gameTitle) {
-        console.log(`📝 Updating game title from "${gameTitle}" to "${gameData.title}"`);
+        console.log(
+          `📝 Updating game title from "${gameTitle}" to "${gameData.title}"`
+        );
       }
     } catch (gameError) {
       console.error(`❌ Error validating game: ${gameError.message}`);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: "Failed to validate game",
-        details: gameError.message
+        details: gameError.message,
       });
     }
 
@@ -129,16 +131,25 @@ const createChallenge = async (req, res) => {
     const challengerUser = challengerUserSnap.val();
 
     if (!challengerUser) {
-      console.error(`❌ Challenger user not found in Realtime Database: ${challengerId}`);
-      console.error(`💡 Hint: User may need to sync their profile from PlayChat app (Profile > Sync button)`);
-      return res.status(404).json({ 
+      console.error(
+        `❌ Challenger user not found in Realtime Database: ${challengerId}`
+      );
+      console.error(
+        `💡 Hint: User may need to sync their profile from PlayChat app (Profile > Sync button)`
+      );
+      return res.status(404).json({
         error: "Challenger user not found",
-        details: "Your profile is not synced to the database. Please go to Profile > Tap 'Sync Profile' button, then try again.",
-        userId: challengerId
+        details:
+          "Your profile is not synced to the database. Please go to Profile > Tap 'Sync Profile' button, then try again.",
+        userId: challengerId,
       });
     }
-    console.log(`✅ Challenger user found: ${challengerUser.username || 'Unknown'}`);
-    console.log(`💰 Challenger wallet balance: ${challengerUser.wallet?.amount || 0} KES`);
+    console.log(
+      `✅ Challenger user found: ${challengerUser.username || "Unknown"}`
+    );
+    console.log(
+      `💰 Challenger wallet balance: ${challengerUser.wallet?.amount || 0} KES`
+    );
 
     const challengerWallet = challengerUser.wallet;
     const challengerBalance = challengerWallet?.amount || 0;
@@ -156,16 +167,25 @@ const createChallenge = async (req, res) => {
     const challengedUser = challengedUserSnap.val();
 
     if (!challengedUser) {
-      console.error(`❌ Challenged user not found in Realtime Database: ${challengedId}`);
-      console.error(`💡 Hint: Opponent may need to open PlayChat app and sync their profile`);
-      return res.status(404).json({ 
+      console.error(
+        `❌ Challenged user not found in Realtime Database: ${challengedId}`
+      );
+      console.error(
+        `💡 Hint: Opponent may need to open PlayChat app and sync their profile`
+      );
+      return res.status(404).json({
         error: "Challenged user not found",
-        details: "The opponent's profile is not synced to the database. They need to open PlayChat app and tap Profile > Sync Profile button.",
-        userId: challengedId
+        details:
+          "The opponent's profile is not synced to the database. They need to open PlayChat app and tap Profile > Sync Profile button.",
+        userId: challengedId,
       });
     }
-    console.log(`✅ Challenged user found: ${challengedUser.username || 'Unknown'}`);
-    console.log(`💰 Challenged wallet balance: ${challengedUser.wallet?.amount || 0} KES`);
+    console.log(
+      `✅ Challenged user found: ${challengedUser.username || "Unknown"}`
+    );
+    console.log(
+      `💰 Challenged wallet balance: ${challengedUser.wallet?.amount || 0} KES`
+    );
 
     const challengedWallet = challengedUser.wallet;
     const challengedBalance = challengedWallet?.amount || 0;
