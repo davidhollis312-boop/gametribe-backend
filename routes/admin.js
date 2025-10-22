@@ -39,7 +39,10 @@ router.post("/sync-wallet/:userId", adminAuth, async (req, res) => {
       lastUpdated: Date.now(),
     };
 
-    await getAdmin().database().ref(`users/${userId}/wallet`).set(walletData);
+    const { database } = getAdmin();
+    const { ref, set } = require("firebase/database");
+    const walletRef = ref(database, `users/${userId}/wallet`);
+    await set(walletRef, walletData);
 
     res.json({
       success: true,
@@ -63,7 +66,8 @@ router.post("/sync-wallets-batch", adminAuth, async (req, res) => {
     }
 
     const results = [];
-    const db = getAdmin().database();
+    const { database } = getAdmin();
+    const { ref, set } = require("firebase/database");
 
     for (const wallet of wallets) {
       try {
@@ -74,7 +78,8 @@ router.post("/sync-wallets-batch", adminAuth, async (req, res) => {
           lastUpdated: Date.now(),
         };
 
-        await db.ref(`users/${wallet.userId}/wallet`).set(walletData);
+        const walletRef = ref(database, `users/${wallet.userId}/wallet`);
+        await set(walletRef, walletData);
 
         results.push({
           userId: wallet.userId,
