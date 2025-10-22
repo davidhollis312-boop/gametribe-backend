@@ -847,12 +847,12 @@ const submitChallengeScore = async (req, res) => {
       });
     }
 
-    // Verify minimum play time (must play for at least 10 seconds)
+    // Verify minimum play time (must play for at least 3 seconds)
     const playTime = Date.now() - session.startTime;
-    if (playTime < 10000) {
+    if (playTime < 3000) {
       return res.status(400).json({
         error: "Invalid play time",
-        message: "Game must be played for at least 10 seconds",
+        message: "Game must be played for at least 3 seconds",
       });
     }
 
