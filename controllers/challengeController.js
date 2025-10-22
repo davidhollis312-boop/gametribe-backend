@@ -75,6 +75,7 @@ const createChallenge = async (req, res) => {
       betAmount,
       gameTitle,
       gameImage,
+      gameUrl,
     } = req.body;
     const userId = req.user.uid;
 
@@ -147,29 +148,33 @@ const createChallenge = async (req, res) => {
     console.log(
       `✅ Challenger user found: ${challengerUser.username || "Unknown"}`
     );
-    
+
     const challengerWallet = challengerUser.wallet;
     const challengerBalance = challengerWallet?.amount || 0;
     const challengerEscrow = challengerWallet?.escrowBalance || 0;
-    
+
     console.log(`💰 Challenger wallet details:`, {
       available: challengerBalance,
       escrow: challengerEscrow,
       betAmount: betAmount,
-      hasEnough: challengerBalance >= betAmount
+      hasEnough: challengerBalance >= betAmount,
     });
 
     if (challengerBalance < betAmount) {
-      console.error(`❌ Insufficient balance: Available ${challengerBalance} KES < Required ${betAmount} KES`);
+      console.error(
+        `❌ Insufficient balance: Available ${challengerBalance} KES < Required ${betAmount} KES`
+      );
       return res.status(400).json({
         error: "Insufficient wallet balance. Please add funds to your wallet.",
         details: `You have ${challengerBalance} KES available, but need ${betAmount} KES for this challenge. (${challengerEscrow} KES is locked in escrow)`,
         available: challengerBalance,
         required: betAmount,
-        escrow: challengerEscrow
+        escrow: challengerEscrow,
       });
     }
-    console.log(`✅ Balance check passed: ${challengerBalance} KES >= ${betAmount} KES`);
+    console.log(
+      `✅ Balance check passed: ${challengerBalance} KES >= ${betAmount} KES`
+    );
 
     // Check if challenged user exists and has wallet
     console.log(`👤 Validating challenged user: ${challengedId}`);
@@ -261,6 +266,7 @@ const createChallenge = async (req, res) => {
       gameId,
       gameTitle,
       gameImage,
+      gameUrl: gameUrl || "",
       betAmount,
       status: "pending", // pending, accepted, completed, rejected, cancelled
       createdAt: Date.now(),
@@ -1212,6 +1218,7 @@ const getChallengeHistory = async (req, res) => {
             gameId: challengeData.gameId,
             gameTitle: challengeData.gameTitle,
             gameImage: challengeData.gameImage,
+            gameUrl: challengeData.gameUrl,
             betAmount: challengeData.betAmount,
             status: challengeData.status,
             createdAt: challengeData.createdAt,
