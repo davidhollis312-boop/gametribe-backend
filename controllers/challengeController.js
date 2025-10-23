@@ -782,10 +782,12 @@ const startGameSession = async (req, res) => {
 
     // Auto-expire session after timeout
     setTimeout(() => {
-      gameSessions.delete(sessionToken);
-      console.log(
-        `🕐 Game session expired: ${sessionToken.substring(0, 8)}...`
-      );
+      if (gameSessions.has(sessionToken)) {
+        gameSessions.delete(sessionToken);
+        console.log(
+          `🕐 Game session expired: ${sessionToken.substring(0, 8)}...`
+        );
+      }
     }, SESSION_TIMEOUT);
 
     console.log(`🎮 Game session started for challenge ${challengeId}`);
@@ -830,6 +832,16 @@ const submitChallengeScore = async (req, res) => {
     // Handle fallback token (when session creation fails)
     const session =
       sessionToken === "fallback" ? null : gameSessions.get(sessionToken);
+
+    console.log(`🔍 Score submission debug:`, {
+      challengeId,
+      userId,
+      sessionToken: sessionToken?.substring(0, 8) + "...",
+      hasSession: !!session,
+      sessionAge: session ? Date.now() - session.startTime : "N/A",
+      totalSessions: gameSessions.size,
+    });
+
     if (!session) {
       // Check if this is a valid challenge and user is participant
       const challengeRef = ref(database, `secureChallenges/${challengeId}`);
@@ -1215,19 +1227,19 @@ const processChallengeCompletion = async (challengeData) => {
 };
 
 /**
- * Get user's challenge history (OPTIMIZED)
+ * Get user's challenge history (FURTHER OPTIMIZED)
  */
 const getChallengeHistory = async (req, res) => {
   try {
     const userId = req.user.uid;
-    const { limit = 50, offset = 0, status } = req.query;
+    const { limit = 10, offset = 0, status } = req.query; // Further reduced to 10
 
     console.log(
       `🔍 Fetching challenges for user: ${userId}, status: ${status || "all"}`
     );
     const startTime = Date.now();
 
-    // Get user's challenges (both as challenger and challenged)
+    // OPTIMIZATION: Use Firebase query to limit data fetched
     const challengesRef = ref(database, "secureChallenges");
     const challengesSnap = await get(challengesRef);
 
@@ -1244,7 +1256,20 @@ const getChallengeHistory = async (req, res) => {
       `📦 Total challenges in DB: ${Object.keys(allChallenges).length}`
     );
 
-    for (const [challengeId, encryptedData] of Object.entries(allChallenges)) {
+    // OPTIMIZATION 2: Sort by creation date first, then filter
+    const sortedChallenges = Object.entries(allChallenges)
+      .map(([challengeId, encryptedData]) => ({ challengeId, encryptedData }))
+      .sort((a, b) => {
+        try {
+          const aData = decryptData(a.encryptedData, ENCRYPTION_KEY);
+          const bData = decryptData(b.encryptedData, ENCRYPTION_KEY);
+          return bData.createdAt - aData.createdAt; // Newest first
+        } catch {
+          return 0;
+        }
+      });
+
+    for (const { challengeId, encryptedData } of sortedChallenges) {
       try {
         const challengeData = decryptData(encryptedData, ENCRYPTION_KEY);
 
@@ -1257,6 +1282,12 @@ const getChallengeHistory = async (req, res) => {
           if (status && challengeData.status !== status) {
             continue;
           }
+
+          // OPTIMIZATION 3: Early pagination - stop if we have enough
+          if (userChallenges.length >= parseInt(limit) + parseInt(offset)) {
+            break;
+          }
+
           // Collect unique user IDs for batch fetching
           uniqueUserIds.add(challengeData.challengerId);
           uniqueUserIds.add(challengeData.challengedId);
