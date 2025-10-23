@@ -24,9 +24,12 @@ const getWalletBalance = async (req, res) => {
     const wallet = user.wallet;
 
     if (!wallet) {
-      // Create wallet with starting balance if it doesn't exist
+      // Check if user has any existing balance in other fields
+      const existingBalance = user.points || user.balance || 0;
+
+      // Create wallet preserving any existing balance
       const newWallet = {
-        amount: 1000, // Starting balance (using 'amount' to match existing structure)
+        amount: existingBalance, // Preserve existing balance
         escrowBalance: 0,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -41,7 +44,10 @@ const getWalletBalance = async (req, res) => {
         success: true,
         balance: newWallet.amount,
         escrowBalance: newWallet.escrowBalance,
-        message: "Wallet created with starting balance",
+        message:
+          existingBalance > 0
+            ? "Wallet created with existing balance"
+            : "Wallet created with zero balance",
       });
     }
 
@@ -65,7 +71,7 @@ const getWalletBalance = async (req, res) => {
 const initializeWallet = async (req, res) => {
   try {
     const userId = req.user.uid;
-    const { startingBalance = 1000 } = req.body;
+    const { startingBalance = 0 } = req.body;
 
     // Check if user exists in users collection first
     const userRef = ref(database, `users/${userId}`);
