@@ -18,6 +18,13 @@ const devLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => {
+    // Handle forwarded headers for Vercel deployment
+    const forwarded = req.headers["x-forwarded-for"];
+    const realIp = req.headers["x-real-ip"];
+    const clientIp = forwarded ? forwarded.split(",")[0] : realIp || req.ip;
+    return clientIp;
+  },
   handler: (req, res) => {
     res.status(429).json({
       error: "Rate limit exceeded",
@@ -40,6 +47,13 @@ const generalLimiter = rateLimit({
   },
   standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  keyGenerator: (req) => {
+    // Handle forwarded headers for Vercel deployment
+    const forwarded = req.headers["x-forwarded-for"];
+    const realIp = req.headers["x-real-ip"];
+    const clientIp = forwarded ? forwarded.split(",")[0] : realIp || req.ip;
+    return clientIp;
+  },
   handler: (req, res) => {
     res.status(429).json({
       error: "Rate limit exceeded",
@@ -87,6 +101,13 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true, // Don't count successful requests
+  keyGenerator: (req) => {
+    // Handle forwarded headers for Vercel deployment
+    const forwarded = req.headers["x-forwarded-for"];
+    const realIp = req.headers["x-real-ip"];
+    const clientIp = forwarded ? forwarded.split(",")[0] : realIp || req.ip;
+    return clientIp;
+  },
   handler: (req, res) => {
     res.status(429).json({
       error: "Authentication rate limit exceeded",
@@ -154,6 +175,13 @@ const searchLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => {
+    // Handle forwarded headers for Vercel deployment
+    const forwarded = req.headers["x-forwarded-for"];
+    const realIp = req.headers["x-real-ip"];
+    const clientIp = forwarded ? forwarded.split(",")[0] : realIp || req.ip;
+    return clientIp;
+  },
   handler: (req, res) => {
     res.status(429).json({
       error: "Search rate limit exceeded",
