@@ -50,6 +50,7 @@ const notificationRouter = require("./routes/notifications");
 const walletRouter = require("./routes/wallet");
 const messagesRouter = require("./routes/messages");
 const adminRouter = require("./routes/admin");
+const migrationRouter = require("./routes/migration");
 
 const app = express();
 
@@ -245,6 +246,7 @@ app.use(`${routePrefix}/notifications`, notificationRouter);
 app.use(`${routePrefix}/wallet`, walletRouter);
 app.use(`${routePrefix}/admin`, adminRouter);
 app.use(`${routePrefix}/messages`, messagesRouter);
+app.use(`${routePrefix}/migration`, migrationRouter);
 
 // Add auth route for cross-platform authentication with conditional rate limiting
 app.use(

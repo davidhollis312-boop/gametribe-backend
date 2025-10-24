@@ -447,6 +447,14 @@ const getChallengeHistory = async (req, res) => {
       `📦 User has ${challengeIds.length} challenges (no decryption needed)`
     );
 
+    // FALLBACK: If no indexes exist, use the old method for existing challenges
+    if (challengeIds.length === 0) {
+      console.log(
+        "🔄 No challenge indexes found, falling back to legacy method..."
+      );
+      return await getChallengeHistoryLegacy(req, res);
+    }
+
     // OPTIMIZATION: Only decrypt challenges we need
     const challengesToDecrypt = challengeIds.slice(
       parseInt(offset),
@@ -553,6 +561,98 @@ const getChallengeHistory = async (req, res) => {
     });
   } catch (error) {
     console.error("Error getting challenge history:", error);
+    res.status(500).json({
+      error: "Failed to get challenge history",
+      message: error.message,
+    });
+  }
+};
+
+/**
+ * Legacy challenge history method (fallback for existing challenges)
+ */
+const getChallengeHistoryLegacy = async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { limit = 10, offset = 0, status } = req.query;
+
+    console.log(`🔍 LEGACY: Fetching challenges for user: ${userId}`);
+    const startTime = Date.now();
+
+    // Get all challenges
+    const challengesRef = ref(database, "secureChallenges");
+    const challengesSnap = await get(challengesRef);
+
+    if (!challengesSnap.exists()) {
+      return res.json({ success: true, data: [], total: 0, hasMore: false });
+    }
+
+    const allChallenges = challengesSnap.val();
+    const userChallenges = [];
+
+    // Process challenges
+    for (const [challengeId, encryptedData] of Object.entries(allChallenges)) {
+      try {
+        const challengeData = decryptData(encryptedData, ENCRYPTION_KEY);
+
+        // Filter user's challenges
+        if (
+          challengeData.challengerId === userId ||
+          challengeData.challengedId === userId
+        ) {
+          // Filter by status if provided
+          if (status && challengeData.status !== status) {
+            continue;
+          }
+
+          userChallenges.push({
+            challengeId: challengeData.challengeId,
+            challengerId: challengeData.challengerId,
+            challengedId: challengeData.challengedId,
+            gameId: challengeData.gameId,
+            gameTitle: challengeData.gameTitle,
+            gameImage: challengeData.gameImage,
+            gameUrl: challengeData.gameUrl,
+            betAmount: challengeData.betAmount,
+            status: challengeData.status,
+            createdAt: challengeData.createdAt,
+            completedAt: challengeData.completedAt,
+            winnerId: challengeData.winnerId,
+            challengerScore: challengeData.challengerScore,
+            challengedScore: challengeData.challengedScore,
+            isChallenger: challengeData.challengerId === userId,
+            opponentId:
+              challengeData.challengerId === userId
+                ? challengeData.challengedId
+                : challengeData.challengerId,
+          });
+        }
+      } catch (decryptError) {
+        console.warn(
+          `Failed to decrypt challenge ${challengeId}:`,
+          decryptError.message
+        );
+      }
+    }
+
+    // Sort by creation date (newest first) and paginate
+    userChallenges.sort((a, b) => b.createdAt - a.createdAt);
+    const paginatedChallenges = userChallenges.slice(
+      parseInt(offset),
+      parseInt(offset) + parseInt(limit)
+    );
+
+    const elapsed = Date.now() - startTime;
+    console.log(`⚡ LEGACY Challenge fetch completed in ${elapsed}ms`);
+
+    res.json({
+      success: true,
+      data: paginatedChallenges,
+      total: userChallenges.length,
+      hasMore: userChallenges.length > parseInt(offset) + parseInt(limit),
+    });
+  } catch (error) {
+    console.error("Error getting challenge history (legacy):", error);
     res.status(500).json({
       error: "Failed to get challenge history",
       message: error.message,
