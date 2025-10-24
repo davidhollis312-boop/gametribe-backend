@@ -274,10 +274,15 @@ const rejectChallenge = async (req, res) => {
  */
 const startGameSession = async (req, res) => {
   try {
-    const { challengeId } = req.params;
+    const { challengeId } = req.body;
     const userId = req.user.uid;
 
     console.log(`🎮 Starting game session: ${challengeId}`);
+
+    // Validate challengeId
+    if (!challengeId) {
+      return res.status(400).json({ error: "Challenge ID is required" });
+    }
 
     // Get encrypted challenge data
     const challengeRef = ref(database, `secureChallenges/${challengeId}`);
@@ -299,7 +304,12 @@ const startGameSession = async (req, res) => {
     }
 
     if (challengeData.status !== "accepted") {
-      return res.status(400).json({ error: "Challenge is not accepted" });
+      return res.status(400).json({
+        error: "Challenge is not accepted",
+        currentStatus: challengeData.status,
+        message:
+          "Please ensure the challenge has been accepted before starting the game",
+      });
     }
 
     // Generate session token
@@ -345,7 +355,10 @@ const submitChallengeScore = async (req, res) => {
     const sessionSnap = await get(sessionRef);
 
     if (!sessionSnap.exists()) {
-      return res.status(403).json({ error: "Invalid or expired game session" });
+      return res.status(403).json({
+        error: "Invalid or expired game session",
+        message: "Please restart the game to get a new session token",
+      });
     }
 
     const sessionData = sessionSnap.val();
@@ -353,11 +366,18 @@ const submitChallengeScore = async (req, res) => {
       sessionData.userId !== userId ||
       sessionData.challengeId !== challengeId
     ) {
-      return res.status(403).json({ error: "Invalid session" });
+      return res.status(403).json({
+        error: "Invalid session",
+        message:
+          "Session token does not match this challenge. Please restart the game.",
+      });
     }
 
     if (Date.now() > sessionData.expiresAt) {
-      return res.status(403).json({ error: "Session expired" });
+      return res.status(403).json({
+        error: "Session expired",
+        message: "Game session has expired. Please restart the game.",
+      });
     }
 
     // Get encrypted challenge data
