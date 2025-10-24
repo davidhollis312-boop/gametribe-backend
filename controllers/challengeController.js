@@ -26,6 +26,23 @@ const {
   getUserChallengeIds,
 } = require("../utils/challengeIndexer");
 const { decryptDataCached } = require("../utils/decryptionCache");
+const {
+  fastEncrypt,
+  fastDecrypt,
+  ultraFastEncrypt,
+  ultraFastDecrypt,
+} = require("../utils/fastEncryption");
+const {
+  getCachedChallenge,
+  setCachedChallenge,
+  getCachedUser,
+  setCachedUser,
+  getCachedChallengeIndex,
+  setCachedChallengeIndex,
+  invalidateChallenge,
+  invalidateUser,
+  invalidateUserChallengeIndexes,
+} = require("../utils/aggressiveCache");
 
 /**
  * Secure Challenge Controller
@@ -192,6 +209,10 @@ const acceptChallenge = async (req, res) => {
       challengeData.challengedId,
       "accepted"
     );
+
+    // ULTRA-OPTIMIZATION: Invalidate caches for both users
+    invalidateUserChallengeIndexes(challengeData.challengerId);
+    invalidateUserChallengeIndexes(challengeData.challengedId);
 
     console.log(`✅ Challenge accepted: ${challengeId}`);
 
@@ -457,8 +478,33 @@ const getChallengeHistory = async (req, res) => {
     const userId = req.user.uid;
     const { limit = 10, offset = 0, status } = req.query;
 
-    console.log(`🔍 OPTIMIZED: Fetching challenges for user: ${userId}`);
+    console.log(`🔍 ULTRA-OPTIMIZED: Fetching challenges for user: ${userId}`);
     const startTime = Date.now();
+
+    // ULTRA-OPTIMIZATION: Check cache first
+    const cacheKey = `${userId}_${status || "all"}`;
+    const cachedResult = getCachedChallengeIndex(userId, status);
+
+    if (cachedResult && cachedResult.length > 0) {
+      console.log(
+        `⚡ CACHE HIT: Using cached challenge index (${cachedResult.length} items)`
+      );
+
+      // Return cached data immediately
+      const challengesToReturn = cachedResult.slice(
+        parseInt(offset),
+        parseInt(offset) + parseInt(limit)
+      );
+
+      const endTime = Date.now();
+      console.log(`⚡ CACHE RESPONSE: ${endTime - startTime}ms`);
+
+      return res.json({
+        challenges: challengesToReturn,
+        total: cachedResult.length,
+        cached: true,
+      });
+    }
 
     // OPTIMIZATION: Use metadata index instead of decrypting all challenges
     const challengeIds = await getUserChallengeIds(userId, status);
@@ -572,6 +618,9 @@ const getChallengeHistory = async (req, res) => {
 
     const elapsed = Date.now() - startTime;
     console.log(`⚡ OPTIMIZED Challenge fetch completed in ${elapsed}ms`);
+
+    // ULTRA-OPTIMIZATION: Cache the results for future requests
+    setCachedChallengeIndex(userId, status, enrichedChallenges);
 
     res.json({
       success: true,
