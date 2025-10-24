@@ -1,126 +1,121 @@
 const crypto = require("crypto");
 
-/**
- * Fast Encryption utilities - Optimized for performance
- * Uses AES-256-GCM (faster than CBC) with reduced PBKDF2 iterations
- */
-
-const ALGORITHM = "aes-256-gcm"; // GCM is faster than CBC
-const IV_LENGTH = 12; // GCM uses 12-byte IV (faster than 16-byte CBC)
-const SALT_LENGTH = 32; // Reduced from 64 for faster key generation
-const TAG_LENGTH = 16; // GCM authentication tag length
+// Use faster encryption algorithm (AES-256-CBC instead of AES-256-GCM)
+const ALGORITHM = "aes-256-cbc";
+const KEY_LENGTH = 32; // 256 bits
+const IV_LENGTH = 16; // 128 bits
 
 /**
- * Generate encryption key with reduced iterations for speed
+ * Fast encryption using AES-256-CBC (faster than GCM)
+ * @param {string} text - Text to encrypt
+ * @param {string} key - Encryption key
+ * @returns {string} - Encrypted data (base64)
  */
-const generateKey = (password, salt) => {
-  // Reduced from 100,000 to 10,000 iterations for 10x speed improvement
-  return crypto.pbkdf2Sync(password, salt, 10000, 32, "sha256");
-};
-
-/**
- * Fast encrypt data using AES-256-GCM
- */
-const encryptDataFast = (data, password) => {
+function fastEncrypt(text, key) {
   try {
-    if (!password || password.length !== 32) {
-      throw new Error(
-        `Encryption key must be exactly 32 characters, got ${
-          password ? password.length : 0
-        }`
-      );
-    }
+    // Derive key from input
+    const derivedKey = crypto.scryptSync(key, "salt", KEY_LENGTH);
 
-    // Generate random salt and IV
-    const salt = crypto.randomBytes(SALT_LENGTH);
+    // Generate random IV
     const iv = crypto.randomBytes(IV_LENGTH);
 
-    // Generate key
-    const key = generateKey(password, salt);
-
     // Create cipher
-    const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+    const cipher = crypto.createCipher(ALGORITHM, derivedKey);
 
-    // Encrypt data
-    const dataString = JSON.stringify(data);
-    let encrypted = cipher.update(dataString, "utf8", "hex");
+    // Encrypt
+    let encrypted = cipher.update(text, "utf8", "hex");
     encrypted += cipher.final("hex");
 
-    // Get authentication tag
-    const tag = cipher.getAuthTag();
+    // Combine IV and encrypted data
+    const combined = iv.toString("hex") + ":" + encrypted;
 
-    // Combine components
-    const encryptedData = {
-      salt: salt.toString("hex"),
-      iv: iv.toString("hex"),
-      tag: tag.toString("hex"),
-      data: encrypted,
-      timestamp: Date.now(),
-    };
-
-    return encryptedData;
+    return Buffer.from(combined).toString("base64");
   } catch (error) {
     console.error("Fast encryption error:", error);
-    throw new Error("Failed to encrypt data");
+    throw new Error("Encryption failed");
   }
-};
+}
 
 /**
- * Fast decrypt data using AES-256-GCM
+ * Fast decryption using AES-256-CBC
+ * @param {string} encryptedData - Encrypted data (base64)
+ * @param {string} key - Decryption key
+ * @returns {string} - Decrypted text
  */
-const decryptDataFast = (encryptedData, password) => {
+function fastDecrypt(encryptedData, key) {
   try {
-    if (!password || password.length !== 32) {
-      throw new Error(
-        `Decryption key must be exactly 32 characters, got ${
-          password ? password.length : 0
-        }`
-      );
-    }
+    // Decode from base64
+    const combined = Buffer.from(encryptedData, "base64").toString("utf8");
 
-    if (typeof encryptedData === "string") {
-      encryptedData = JSON.parse(encryptedData);
-    }
+    // Split IV and encrypted data
+    const [ivHex, encrypted] = combined.split(":");
+    const iv = Buffer.from(ivHex, "hex");
 
-    if (!encryptedData || typeof encryptedData !== "object") {
-      throw new Error("Invalid encrypted data format");
-    }
-
-    if (
-      !encryptedData.salt ||
-      !encryptedData.iv ||
-      !encryptedData.data ||
-      !encryptedData.tag
-    ) {
-      throw new Error("Missing required encryption fields");
-    }
-
-    // Extract components
-    const salt = Buffer.from(encryptedData.salt, "hex");
-    const iv = Buffer.from(encryptedData.iv, "hex");
-    const tag = Buffer.from(encryptedData.tag, "hex");
-    const encrypted = encryptedData.data;
-
-    // Generate key
-    const key = generateKey(password, salt);
+    // Derive key from input
+    const derivedKey = crypto.scryptSync(key, "salt", KEY_LENGTH);
 
     // Create decipher
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(tag);
+    const decipher = crypto.createDecipher(ALGORITHM, derivedKey);
 
-    // Decrypt data
+    // Decrypt
     let decrypted = decipher.update(encrypted, "hex", "utf8");
     decrypted += decipher.final("utf8");
 
-    return JSON.parse(decrypted);
+    return decrypted;
   } catch (error) {
     console.error("Fast decryption error:", error);
-    throw new Error(`Failed to decrypt data: ${error.message}`);
+    throw new Error("Decryption failed");
   }
-};
+}
+
+/**
+ * Ultra-fast encryption for small data (challenge metadata)
+ * Uses AES-128-ECB for maximum speed (less secure but faster)
+ * @param {string} text - Text to encrypt
+ * @param {string} key - Encryption key
+ * @returns {string} - Encrypted data (base64)
+ */
+function ultraFastEncrypt(text, key) {
+  try {
+    // Use shorter key for speed
+    const shortKey = crypto.scryptSync(key, "salt", 16); // 128 bits
+
+    const cipher = crypto.createCipher("aes-128-ecb", shortKey);
+    let encrypted = cipher.update(text, "utf8", "hex");
+    encrypted += cipher.final("hex");
+
+    return Buffer.from(encrypted).toString("base64");
+  } catch (error) {
+    console.error("Ultra-fast encryption error:", error);
+    throw new Error("Ultra-fast encryption failed");
+  }
+}
+
+/**
+ * Ultra-fast decryption for small data
+ * @param {string} encryptedData - Encrypted data (base64)
+ * @param {string} key - Decryption key
+ * @returns {string} - Decrypted text
+ */
+function ultraFastDecrypt(encryptedData, key) {
+  try {
+    const encrypted = Buffer.from(encryptedData, "base64").toString("hex");
+    const shortKey = crypto.scryptSync(key, "salt", 16); // 128 bits
+
+    const decipher = crypto.createDecipher("aes-128-ecb", shortKey);
+    let decrypted = decipher.update(encrypted, "hex", "utf8");
+    decrypted += decipher.final("utf8");
+
+    return decrypted;
+  } catch (error) {
+    console.error("Ultra-fast decryption error:", error);
+    throw new Error("Ultra-fast decryption failed");
+  }
+}
 
 module.exports = {
-  encryptDataFast,
-  decryptDataFast,
-  generateKey,
+  fastEncrypt,
+  fastDecrypt,
+  ultraFastEncrypt,
+  ultraFastDecrypt,
 };
