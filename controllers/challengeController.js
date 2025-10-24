@@ -19,6 +19,13 @@ const {
   decryptData,
   generateChallengeId,
 } = require("../utils/encryption");
+const {
+  addChallengeToUserIndex,
+  updateChallengeInUserIndex,
+  removeChallengeFromUserIndex,
+  getUserChallengeIds,
+} = require("../utils/challengeIndexer");
+const { decryptDataCached } = require("../utils/decryptionCache");
 
 /**
  * Secure Challenge Controller
@@ -112,6 +119,14 @@ const createChallenge = async (req, res) => {
     const challengeRef = ref(database, `secureChallenges/${challengeId}`);
     await set(challengeRef, encryptedData);
 
+    // Add to user indexes for fast queries
+    await addChallengeToUserIndex(
+      challengeId,
+      challengerId,
+      challengedId,
+      "pending"
+    );
+
     console.log(`✅ Challenge created: ${challengeId}`);
 
     res.json({
@@ -170,6 +185,14 @@ const acceptChallenge = async (req, res) => {
     const encryptedData = encryptData(challengeData, ENCRYPTION_KEY);
     await set(challengeRef, encryptedData);
 
+    // Update user indexes
+    await updateChallengeInUserIndex(
+      challengeId,
+      challengeData.challengerId,
+      challengeData.challengedId,
+      "accepted"
+    );
+
     console.log(`✅ Challenge accepted: ${challengeId}`);
 
     res.json({
@@ -222,6 +245,14 @@ const rejectChallenge = async (req, res) => {
     // Encrypt updated data
     const encryptedData = encryptData(challengeData, ENCRYPTION_KEY);
     await set(challengeRef, encryptedData);
+
+    // Update user indexes
+    await updateChallengeInUserIndex(
+      challengeId,
+      challengeData.challengerId,
+      challengeData.challengedId,
+      "rejected"
+    );
 
     console.log(`✅ Challenge rejected: ${challengeId}`);
 
@@ -406,57 +437,65 @@ const getChallengeHistory = async (req, res) => {
     const userId = req.user.uid;
     const { limit = 10, offset = 0, status } = req.query;
 
-    console.log(`🔍 Fetching challenges for user: ${userId}`);
+    console.log(`🔍 OPTIMIZED: Fetching challenges for user: ${userId}`);
     const startTime = Date.now();
 
-    // Get all challenges
-    const challengesRef = ref(database, "secureChallenges");
-    const challengesSnap = await get(challengesRef);
+    // OPTIMIZATION: Use metadata index instead of decrypting all challenges
+    const challengeIds = await getUserChallengeIds(userId, status);
 
-    if (!challengesSnap.exists()) {
-      return res.json({ success: true, data: [], total: 0, hasMore: false });
-    }
+    console.log(
+      `📦 User has ${challengeIds.length} challenges (no decryption needed)`
+    );
 
-    const allChallenges = challengesSnap.val();
+    // OPTIMIZATION: Only decrypt challenges we need
+    const challengesToDecrypt = challengeIds.slice(
+      parseInt(offset),
+      parseInt(offset) + parseInt(limit)
+    );
+
     const userChallenges = [];
+    const uniqueUserIds = new Set();
 
-    // Process challenges
-    for (const [challengeId, encryptedData] of Object.entries(allChallenges)) {
+    // Decrypt only the challenges we need
+    for (const challengeId of challengesToDecrypt) {
       try {
-        const challengeData = decryptData(encryptedData, ENCRYPTION_KEY);
+        const challengeRef = ref(database, `secureChallenges/${challengeId}`);
+        const challengeSnap = await get(challengeRef);
 
-        // Filter user's challenges
-        if (
-          challengeData.challengerId === userId ||
-          challengeData.challengedId === userId
-        ) {
-          // Filter by status if provided
-          if (status && challengeData.status !== status) {
-            continue;
-          }
+        if (!challengeSnap.exists()) continue;
 
-          userChallenges.push({
-            challengeId: challengeData.challengeId,
-            challengerId: challengeData.challengerId,
-            challengedId: challengeData.challengedId,
-            gameId: challengeData.gameId,
-            gameTitle: challengeData.gameTitle,
-            gameImage: challengeData.gameImage,
-            gameUrl: challengeData.gameUrl,
-            betAmount: challengeData.betAmount,
-            status: challengeData.status,
-            createdAt: challengeData.createdAt,
-            completedAt: challengeData.completedAt,
-            winnerId: challengeData.winnerId,
-            challengerScore: challengeData.challengerScore,
-            challengedScore: challengeData.challengedScore,
-            isChallenger: challengeData.challengerId === userId,
-            opponentId:
-              challengeData.challengerId === userId
-                ? challengeData.challengedId
-                : challengeData.challengerId,
-          });
-        }
+        const challengeData = decryptDataCached(
+          challengeSnap.val(),
+          ENCRYPTION_KEY,
+          challengeId
+        );
+
+        // Collect unique user IDs for batch fetching
+        uniqueUserIds.add(challengeData.challengerId);
+        uniqueUserIds.add(challengeData.challengedId);
+
+        // Store minimal challenge data
+        userChallenges.push({
+          challengeId: challengeData.challengeId,
+          challengerId: challengeData.challengerId,
+          challengedId: challengeData.challengedId,
+          gameId: challengeData.gameId,
+          gameTitle: challengeData.gameTitle,
+          gameImage: challengeData.gameImage,
+          gameUrl: challengeData.gameUrl,
+          betAmount: challengeData.betAmount,
+          status: challengeData.status,
+          createdAt: challengeData.createdAt,
+          completedAt: challengeData.completedAt,
+          winnerId: challengeData.winnerId,
+          challengerScore: challengeData.challengerScore,
+          challengedScore: challengeData.challengedScore,
+          isChallenger: challengeData.challengerId === userId,
+          opponentId:
+            challengeData.challengerId === userId
+              ? challengeData.challengedId
+              : challengeData.challengerId,
+        });
       } catch (decryptError) {
         console.warn(
           `Failed to decrypt challenge ${challengeId}:`,
@@ -465,21 +504,52 @@ const getChallengeHistory = async (req, res) => {
       }
     }
 
-    // Sort by creation date (newest first) and paginate
-    userChallenges.sort((a, b) => b.createdAt - a.createdAt);
-    const paginatedChallenges = userChallenges.slice(
-      parseInt(offset),
-      parseInt(offset) + parseInt(limit)
-    );
+    // OPTIMIZATION: Batch fetch user data
+    const userDataMap = {};
+    if (uniqueUserIds.size > 0) {
+      const userPromises = Array.from(uniqueUserIds).map(async (uid) => {
+        try {
+          const userRef = ref(database, `users/${uid}`);
+          const userSnap = await get(userRef);
+          if (userSnap.exists()) {
+            const userData = userSnap.val();
+            userDataMap[uid] = {
+              displayName:
+                userData.displayName || userData.username || "Unknown Player",
+              photoURL: userData.photoURL || userData.avatar || "",
+            };
+          }
+        } catch (error) {
+          console.warn(`Failed to fetch user data for ${uid}:`, error.message);
+        }
+      });
+      await Promise.all(userPromises);
+    }
+
+    console.log(`✅ Fetched ${Object.keys(userDataMap).length} user profiles`);
+
+    // OPTIMIZATION: Enrich challenges with user data
+    const enrichedChallenges = userChallenges.map((challenge) => {
+      const challengerData = userDataMap[challenge.challengerId] || {};
+      const challengedData = userDataMap[challenge.challengedId] || {};
+
+      return {
+        ...challenge,
+        challengerName: challengerData.displayName || "Unknown Player",
+        challengedName: challengedData.displayName || "Unknown Player",
+        challengerAvatar: challengerData.photoURL || "",
+        challengedAvatar: challengedData.photoURL || "",
+      };
+    });
 
     const elapsed = Date.now() - startTime;
-    console.log(`⚡ Challenge fetch completed in ${elapsed}ms`);
+    console.log(`⚡ OPTIMIZED Challenge fetch completed in ${elapsed}ms`);
 
     res.json({
       success: true,
-      data: paginatedChallenges,
-      total: userChallenges.length,
-      hasMore: userChallenges.length > parseInt(offset) + parseInt(limit),
+      data: enrichedChallenges,
+      total: challengeIds.length,
+      hasMore: challengeIds.length > parseInt(offset) + parseInt(limit),
     });
   } catch (error) {
     console.error("Error getting challenge history:", error);
