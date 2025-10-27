@@ -110,6 +110,99 @@ const createChallenge = async (req, res) => {
       });
     }
 
+    // DUPLICATE PREVENTION: Check for existing pending/accepted challenges between these users
+    console.log(`🔍 Checking for duplicate challenges...`);
+    try {
+      const existingChallengeIds = await getUserChallengeIds(
+        challengerId,
+        "pending"
+      );
+
+      // Check challenger's pending challenges
+      for (const existingChallengeId of existingChallengeIds) {
+        const existingChallengeRef = ref(
+          database,
+          `secureChallenges/${existingChallengeId}`
+        );
+        const existingChallengeSnap = await get(existingChallengeRef);
+
+        if (existingChallengeSnap.exists()) {
+          const existingChallengeData = decryptData(
+            existingChallengeSnap.val(),
+            ENCRYPTION_KEY
+          );
+
+          // Check if this is a challenge with the same opponent and game
+          if (
+            (existingChallengeData.challengerId === challengerId &&
+              existingChallengeData.challengedId === challengedId) ||
+            (existingChallengeData.challengerId === challengedId &&
+              existingChallengeData.challengedId === challengerId)
+          ) {
+            if (
+              existingChallengeData.gameId === gameId &&
+              existingChallengeData.status === "pending"
+            ) {
+              return res.status(409).json({
+                error:
+                  "A pending challenge already exists with this opponent for this game",
+                existingChallengeId: existingChallengeId,
+              });
+            }
+          }
+        }
+      }
+
+      // Also check challenger's accepted challenges
+      const acceptedChallengeIds = await getUserChallengeIds(
+        challengerId,
+        "accepted"
+      );
+
+      for (const existingChallengeId of acceptedChallengeIds) {
+        const existingChallengeRef = ref(
+          database,
+          `secureChallenges/${existingChallengeId}`
+        );
+        const existingChallengeSnap = await get(existingChallengeRef);
+
+        if (existingChallengeSnap.exists()) {
+          const existingChallengeData = decryptData(
+            existingChallengeSnap.val(),
+            ENCRYPTION_KEY
+          );
+
+          // Check if this is an accepted challenge with the same opponent
+          if (
+            (existingChallengeData.challengerId === challengerId &&
+              existingChallengeData.challengedId === challengedId) ||
+            (existingChallengeData.challengerId === challengedId &&
+              existingChallengeData.challengedId === challengerId)
+          ) {
+            // Allow only if at least one player has submitted their score
+            if (
+              !existingChallengeData.challengerScore &&
+              !existingChallengeData.challengedScore
+            ) {
+              return res.status(409).json({
+                error:
+                  "An active challenge already exists with this opponent. Please complete it first.",
+                existingChallengeId: existingChallengeId,
+              });
+            }
+          }
+        }
+      }
+
+      console.log(`✅ No duplicate challenges found`);
+    } catch (duplicateCheckError) {
+      console.error(
+        `⚠️ Error checking for duplicates: ${duplicateCheckError.message}`
+      );
+      // Continue with challenge creation even if duplicate check fails
+      // This prevents blocking challenge creation due to indexing issues
+    }
+
     // Generate challenge ID
     const challengeId = generateChallengeId();
 
@@ -500,7 +593,8 @@ const getChallengeHistory = async (req, res) => {
       console.log(`⚡ CACHE RESPONSE: ${endTime - startTime}ms`);
 
       return res.json({
-        challenges: challengesToReturn,
+        success: true,
+        data: challengesToReturn,
         total: cachedResult.length,
         cached: true,
       });
