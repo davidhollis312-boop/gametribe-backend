@@ -545,6 +545,20 @@ const submitChallengeScore = async (req, res) => {
     const encryptedData = encryptData(challengeData, ENCRYPTION_KEY);
     await set(challengeRef, encryptedData);
 
+    // Update user indexes for status change
+    if (challengeData.status === "completed") {
+      await updateChallengeInUserIndex(
+        challengeId,
+        challengeData.challengerId,
+        challengeData.challengedId,
+        "completed"
+      );
+    }
+
+    // ULTRA-OPTIMIZATION: Invalidate caches for both users
+    invalidateUserChallengeIndexes(challengeData.challengerId);
+    invalidateUserChallengeIndexes(challengeData.challengedId);
+
     // Remove session token
     await remove(sessionRef);
 
