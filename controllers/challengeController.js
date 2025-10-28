@@ -819,12 +819,54 @@ const getChallengeHistoryLegacy = async (req, res) => {
       parseInt(offset) + parseInt(limit)
     );
 
+    // Enrich with user names (same as main function)
+    const uniqueUserIds = new Set();
+    paginatedChallenges.forEach((challenge) => {
+      uniqueUserIds.add(challenge.challengerId);
+      uniqueUserIds.add(challenge.challengedId);
+    });
+
+    const userDataMap = {};
+    if (uniqueUserIds.size > 0) {
+      const userPromises = Array.from(uniqueUserIds).map(async (uid) => {
+        try {
+          const userRef = ref(database, `users/${uid}`);
+          const userSnap = await get(userRef);
+          if (userSnap.exists()) {
+            const userData = userSnap.val();
+            userDataMap[uid] = {
+              displayName:
+                userData.displayName || userData.username || "Unknown Player",
+              photoURL: userData.photoURL || userData.avatar || "",
+            };
+          }
+        } catch (error) {
+          console.warn(`Failed to fetch user data for ${uid}:`, error.message);
+        }
+      });
+      await Promise.all(userPromises);
+    }
+
+    // Enrich challenges with user data
+    const enrichedChallenges = paginatedChallenges.map((challenge) => {
+      const challengerData = userDataMap[challenge.challengerId] || {};
+      const challengedData = userDataMap[challenge.challengedId] || {};
+
+      return {
+        ...challenge,
+        challengerName: challengerData.displayName || "Unknown Player",
+        challengedName: challengedData.displayName || "Unknown Player",
+        challengerAvatar: challengerData.photoURL || "",
+        challengedAvatar: challengedData.photoURL || "",
+      };
+    });
+
     const elapsed = Date.now() - startTime;
     console.log(`⚡ LEGACY Challenge fetch completed in ${elapsed}ms`);
 
     res.json({
       success: true,
-      data: paginatedChallenges,
+      data: enrichedChallenges,
       total: userChallenges.length,
       hasMore: userChallenges.length > parseInt(offset) + parseInt(limit),
     });
